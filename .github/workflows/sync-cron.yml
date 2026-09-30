@@ -1,0 +1,19 @@
+name: Sync PNCP
+
+on:
+  schedule:
+    # Horários em UTC = 9h, 14h e 20h em Maceió (UTC-3), pra bater com a cadência do ConLicitação
+    - cron: '0 12 * * *'
+    - cron: '0 17 * * *'
+    - cron: '0 23 * * *'
+  workflow_dispatch: {}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Chamar /api/sync
+        run: |
+          curl -sf -w "\nHTTP %{http_code}\n" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/sync"

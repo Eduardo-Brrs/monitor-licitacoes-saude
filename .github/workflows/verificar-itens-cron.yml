@@ -1,0 +1,38 @@
+name: Verificar Itens Pendentes
+
+on:
+  schedule:
+    # A cada 30min, o dia inteiro — lote pequeno por execução (ver
+    # app/api/verificar-itens/route.ts), diluído ao longo do dia em vez de
+    # processar tudo de uma vez, pra não estourar rate limit do PNCP nem o
+    # tempo máximo da função da Vercel.
+    - cron: '*/30 * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  verificar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Chamar /api/verificar-itens
+        run: |
+          curl -sf -w "\nHTTP %{http_code}\n" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/verificar-itens"
+      # Mesmo ritmo de 30min: preenche a cópia de anexos/itens dos editais
+      # (app/api/atualizar-detalhes/route.ts). Passo separado pra falha de um
+      # não esconder o resultado do outro.
+      - name: Chamar /api/atualizar-detalhes
+        if: always()
+        run: |
+          curl -sf -w "\nHTTP %{http_code}\n" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/atualizar-detalhes"
+      # Acompanhamento automático dos favoritados (resultado, ata, contrato) —
+      # app/api/acompanhar/route.ts. Cada edital é reconsultado a cada 12h;
+      # nas outras rodadas a fila vem vazia e o passo termina em ~1s.
+      - name: Chamar /api/acompanhar
+        if: always()
+        run: |
+          curl -sf -w "\nHTTP %{http_code}\n" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ secrets.APP_URL }}/api/acompanhar"

@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+/* Tokens de docs/design/DESIGN.md. Os nomes crus (--bg, --surface, --ink...)
+   são os que a spec define e ficam aqui como fonte única; o bloco @theme
+   abaixo só os reexporta no formato que o Tailwind v4 precisa pra gerar as
+   utilidades (bg-surface, text-muted, border-border-strong...). */
+:root {
+  --bg: #f6f5f1;
+  --surface: #ffffff;
+  --surface-muted: #fbfaf7;
+  --border: #e4e2dc;
+  --border-strong: #d9d6ce;
+  --ink: #16181d;
+  --ink-2: #45494f;
+  --muted: #5b6069;
+  --faint: #74797f;
+  --sidebar: #16181d;
+  --sidebar-active: #262a31;
+  --sidebar-text: #c9c7c0;
+  --accent: #1b5e4b;
+  --accent-strong: #14402f;
+  --accent-soft: #e4efe8;
+  --warn: #a8431f;
+  --warn-strong: #8e3818;
+  --warn-soft: #fbede7;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-muted: var(--surface-muted);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-text: var(--sidebar-text);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-warn: var(--warn);
+  --color-warn-strong: var(--warn-strong);
+  --color-warn-soft: var(--warn-soft);
+
+  /* Fraunces só no h1 de cada página e na marca; Plex Sans no resto. */
+  --font-display: var(--font-fraunces), Georgia, serif;
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  --radius-control: 7px;
+  --radius-card: 10px;
+  --radius-badge: 5px;
+}
+
+@layer base {
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+  }
+
+  /* A spec pede tabular-nums em todo uso da mono (valores, contagens, números
+     de processo). Centralizado aqui pra não depender de cada componente
+     lembrar de somar a utilidade. */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+}
