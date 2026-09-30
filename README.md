@@ -10,7 +10,13 @@ Todo dia o sistema varre as fontes oficiais de compras públicas, filtra o que i
 
 ## O problema
 
-Uma empresa que vende para o governo precisa saber, todo dia, quais órgãos abriram compras dos produtos dela. Hoje isso passa por serviços pagos que agregam editais. Esses serviços são caros e cheios de funções que o time não usa, e mesmo assim deixam coisas passar.
+Uma empresa que vende para o governo precisa saber, todo dia, quais órgãos abriram compras dos produtos dela. Hoje isso passa por serviços pagos que agregam editais. A empresa usava um desses serviços, e as queixas de quem usava no dia a dia eram:
+
+- **Feito para qualquer ramo, não para a área médica.** A plataforma atende de construtora a gráfica. Para o setor de saúde isso significa filtrar à mão boletins cheios de coisa que não interessa, e ainda assim perder oportunidades específicas do ramo, como as aquisições judiciais de OPME e medicamentos.
+- **Função demais.** A tela é cheia de módulos, menus e recursos que ninguém usava. O dono da empresa reclamava bastante da quantidade de coisa na plataforma. O que ele queria era algo enxuto, fácil de usar e focado no ramo dele: abrir, ver o que chegou de novo e decidir em segundos.
+- **Caro para o que entrega.** Paga-se pelo pacote inteiro e usa-se só uma fração dele.
+
+Por isso o princípio do projeto é **fazer pouco e fazer certo**: só as funções que o usuário realmente usa, com o filtro afinado para o catálogo de uma distribuidora de material médico-hospitalar. Uma função chegou a ser descartada no planejamento (leitura de edital por IA) porque o serviço pago tinha e ninguém usava.
 
 As informações são públicas, mas estão espalhadas:
 
