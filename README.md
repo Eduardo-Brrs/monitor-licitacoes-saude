@@ -6,6 +6,12 @@ Todo dia o sistema varre as fontes oficiais de compras públicas, filtra o que i
 
 > **Status:** em uso interno, fase de validação (MVP). Este repositório é um retrato do código publicado como portfólio; o desenvolvimento acontece num repositório privado, junto com os dados, as credenciais e a instância de produção.
 
+![Boletim do dia: lista única de editais do PNCP e avisos dos diários oficiais, ordenada por urgência](docs/telas/boletim-do-dia.webp)
+<sub>Boletim do dia: editais do PNCP e avisos dos diários oficiais numa lista só, ordenada por prazo, com triagem por teclado (J/K navegar, F favoritar, D descartar).</sub>
+
+![Detalhe do edital: dados da compra, itens que batem com o catálogo, anexos e painel de acompanhamento](docs/telas/detalhe-do-edital.webp)
+<sub>Detalhe do edital: só os itens que batem com o catálogo (1 de 80, no exemplo), anexos, status interno, anotações, tarefas e linha do tempo.</sub>
+
 ---
 
 ## O problema
