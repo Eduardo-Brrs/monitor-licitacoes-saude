@@ -1,4 +1,4 @@
-# Automatiza Licitação
+# Monitor de Licitações — Saúde
 
 Sistema de monitoramento de licitações públicas da área da saúde em Alagoas. Foi construído para uso interno de uma distribuidora de material médico-hospitalar, para substituir uma assinatura paga de alertas de licitação.
 
