@@ -1,5 +1,7 @@
 # Monitor de Licitações — Saúde
 
+[English](README.en.md) · **Português**
+
 [![CI](https://github.com/Eduardo-Brrs/monitor-licitacoes-saude/actions/workflows/ci.yml/badge.svg)](https://github.com/Eduardo-Brrs/monitor-licitacoes-saude/actions/workflows/ci.yml)
 
 Sistema de monitoramento de licitações públicas da área da saúde em Alagoas. Foi construído para uso interno de uma distribuidora de material médico-hospitalar, para substituir uma assinatura paga de alertas de licitação.
