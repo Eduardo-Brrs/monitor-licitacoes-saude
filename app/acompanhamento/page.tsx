@@ -1,28 +1,22 @@
 import Link from 'next/link'
 import { EstrelaFavorito } from '@/components/acompanhamento/estrela'
 import { SeletorOrdem } from '@/components/acompanhamento/ordenar'
-import { listarAcompanhamento, ordenarAcompanhamento, passaNoFiltro } from '@/lib/acompanhamento'
+import { MenuAcoes } from '@/components/acompanhamento/menu-acoes'
+import { SeletorStatus } from '@/components/acompanhamento/seletor-status'
+import { listarAcompanhamento, listarResponsaveis, ordenarAcompanhamento, passaNoFiltro } from '@/lib/acompanhamento'
 import {
   ehFiltroAcompanhamento,
+  etapaDe,
+  etapaFinal,
   FILTROS_ACOMPANHAMENTO,
-  rotuloDoStatus,
   type FiltroAcompanhamento,
   type Ordenacao,
-  type StatusInterno,
 } from '@/lib/acompanhamento-tipos'
-import { descreverPrazo, diasAteAbertura, formatarDiaMes, formatarValor, prazoEstaCurto } from '@/lib/formato'
+import { descreverPrazo, diasAteAbertura, formatarDataHora, formatarDiaMes, formatarValor, prazoEstaCurto } from '@/lib/formato'
 
 // Tela 03 do DESIGN.md: tabela única (não kanban), pílulas de status com
 // contagem, ordenação por abertura mais próxima. Editais do PNCP e avisos de
 // diário favoritados ou com status interno.
-
-const COR_STATUS: Record<StatusInterno | 'favoritada', string> = {
-  favoritada: 'bg-[#edebe5] text-ink',
-  gerenciada: 'bg-[#edebe5] text-ink',
-  em_andamento: 'bg-warn-soft text-warn-strong',
-  finalizada: 'bg-[#edebe5] text-ink-2',
-  ganha: 'bg-accent-soft text-accent-strong',
-}
 
 const TH = 'border-b border-border-strong px-2 py-2 text-left text-[11px] font-medium uppercase tracking-[0.05em] text-faint'
 const TD = 'border-b border-[#e9e7e1] px-2 py-[9px] align-middle'
@@ -42,7 +36,7 @@ export default async function Acompanhamento({ searchParams }: PageProps<'/acomp
   const filtro: FiltroAcompanhamento = ehFiltroAcompanhamento(params.filtro) ? params.filtro : 'todas'
   const ordem: Ordenacao = params.ordem === 'valor' ? 'valor' : 'abertura'
 
-  const todos = await listarAcompanhamento()
+  const [todos, responsaveis] = await Promise.all([listarAcompanhamento(), listarResponsaveis()])
   const itens = ordenarAcompanhamento(
     todos.filter((i) => passaNoFiltro(i, filtro)),
     ordem
@@ -56,6 +50,10 @@ export default async function Acompanhamento({ searchParams }: PageProps<'/acomp
     const dias = diasAteAbertura(i.abertura)
     return dias !== null && dias >= 0 && dias <= 7
   }).length
+  // Soma do valor informado ao finalizar como ganha (2026-10-27) — é o número
+  // que mede o resultado do sistema.
+  const ganhas = todos.filter((i) => i.statusInterno === 'ganha')
+  const valorGanho = ganhas.reduce((soma, i) => soma + (i.finalizacao?.valorGanho ?? 0), 0)
 
   const csv = `/acompanhamento/csv${filtro !== 'todas' ? `?filtro=${filtro}` : ''}`
 
@@ -63,11 +61,16 @@ export default async function Acompanhamento({ searchParams }: PageProps<'/acomp
     <>
       <header className="flex items-end gap-4 border-b border-border bg-surface-muted px-6 pb-4 pt-[22px]">
         <div className="flex grow flex-col gap-1">
-          <h1 className="m-0 font-display text-[26px] font-semibold -tracking-[0.01em]">Acompanhamento</h1>
+          <h1 className="m-0 font-display text-[26px] font-semibold -tracking-[0.01em]">Gerenciar licitações</h1>
           <p className="m-0 text-[13px] text-muted">
             {todos.length} {todos.length === 1 ? 'licitação' : 'licitações'}
             {emDisputa > 0 && ` · R$ ${VALOR_CURTO.format(emDisputa)} em disputa`}
             {` · ${estaSemana} com prazo esta semana`}
+            {valorGanho > 0 && (
+              <span className="text-accent-strong">
+                {` · R$ ${VALOR_CURTO.format(valorGanho)} ganhos em ${ganhas.length} ${ganhas.length === 1 ? 'licitação' : 'licitações'}`}
+              </span>
+            )}
           </p>
         </div>
         <a
@@ -109,7 +112,7 @@ export default async function Acompanhamento({ searchParams }: PageProps<'/acomp
         {itens.length === 0 ? (
           <div className="flex flex-col items-center gap-1 py-12 text-center text-[13px] text-muted">
             <p className="m-0">
-              {todos.length === 0 ? 'Nada em acompanhamento ainda.' : 'Nenhuma licitação neste filtro.'}
+              {todos.length === 0 ? 'Nenhuma licitação sendo gerenciada ainda.' : 'Nenhuma licitação neste filtro.'}
             </p>
             {todos.length === 0 && (
               <p className="m-0 text-faint">
@@ -125,8 +128,10 @@ export default async function Acompanhamento({ searchParams }: PageProps<'/acomp
               <col className="w-[128px]" />
               <col className="w-[84px]" />
               <col className="w-[110px]" />
-              <col className="w-[110px]" />
-              <col className="w-[210px]" />
+              <col className="w-[200px]" />
+              <col className="w-[96px]" />
+              <col className="w-[180px]" />
+              <col className="w-[44px]" />
             </colgroup>
             <thead>
               <tr>
@@ -146,23 +151,32 @@ export default async function Acompanhamento({ searchParams }: PageProps<'/acomp
                   Valor est.
                 </th>
                 <th scope="col" className={TH}>
+                  Última movimentação
+                </th>
+                <th scope="col" className={TH}>
                   Responsável
                 </th>
                 <th scope="col" className={TH}>
                   Próxima tarefa
                 </th>
+                <th scope="col" className={TH}>
+                  <span className="sr-only">Ações</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {itens.map((i) => {
-                const statusChave = i.statusInterno ?? 'favoritada'
                 const tarefa = i.proximaTarefa
                 const prazoTarefa = tarefa ? descreverPrazo(tarefa.prazo) : null
                 const aberturaPassou = (diasAteAbertura(i.abertura) ?? 0) < 0
+                const etapa = etapaDe(i)
                 return (
                   <tr key={i.chave} className="hover:bg-surface-muted">
                     <td className={`${TD} pl-0`}>
-                      <EstrelaFavorito fonte={i.fonte} itemId={i.id} favorito={i.favorito} rotulo={i.objeto} />
+                      {/* Com status a estrela fica apagada (etapa única) — o seletor ao lado é que muda. */}
+                      {!i.statusInterno && (
+                        <EstrelaFavorito fonte={i.fonte} itemId={i.id} favorito={i.favorito} rotulo={i.objeto} />
+                      )}
                     </td>
                     <td className={TD}>
                       <div className="flex min-w-0 flex-col gap-0.5">
@@ -184,18 +198,41 @@ export default async function Acompanhamento({ searchParams }: PageProps<'/acomp
                       </div>
                     </td>
                     <td className={TD}>
-                      <span className={`inline-block rounded-badge px-[9px] py-1 text-[11.5px] ${COR_STATUS[statusChave]}`}>
-                        {rotuloDoStatus(i)}
-                      </span>
+                      <SeletorStatus fonte={i.fonte} itemId={i.id} etapa={etapa} finalizacao={i.finalizacao} rotulo={i.objeto} />
+                      {i.finalizacao?.valorGanho ? (
+                        <span className="mt-1 block font-mono text-[11.5px] text-accent-strong" title="Valor ganho">
+                          {formatarValor(i.finalizacao.valorGanho)}
+                        </span>
+                      ) : null}
                     </td>
                     <td
                       className={`${TD} font-mono ${
                         prazoEstaCurto(i.abertura) ? 'text-warn' : aberturaPassou ? 'text-faint' : ''
                       }`}
+                      title={i.abertura ? `Limite da proposta: ${formatarDataHora(i.abertura)}` : undefined}
                     >
                       {i.abertura ? formatarDiaMes(i.abertura) : '—'}
                     </td>
                     <td className={`${TD} text-right font-mono`}>{formatarValor(i.valorEstimado)}</td>
+                    <td className={`${TD} text-[12px]`}>
+                      {i.ultimaMovimentacao ? (
+                        <Link href={i.href} className="flex flex-col gap-0.5 text-ink no-underline hover:text-accent">
+                          <span className="line-clamp-2" title={i.ultimaMovimentacao.descricao}>
+                            {i.ultimaMovimentacao.nova && (
+                              <span className="mr-1.5 rounded-badge bg-accent px-1 py-px align-[1px] text-[10px] font-medium uppercase tracking-[0.04em] text-white">
+                                novo
+                              </span>
+                            )}
+                            {i.ultimaMovimentacao.descricao}
+                          </span>
+                          <span className="font-mono text-[11px] text-faint">
+                            {formatarDiaMes(i.ultimaMovimentacao.data)}
+                          </span>
+                        </Link>
+                      ) : (
+                        <span className="text-faint">—</span>
+                      )}
+                    </td>
                     <td className={TD}>{tarefa?.responsavel?.nome ?? '—'}</td>
                     <td className={`${TD} text-[12px]`}>
                       {tarefa ? (
@@ -211,6 +248,16 @@ export default async function Acompanhamento({ searchParams }: PageProps<'/acomp
                       ) : (
                         '—'
                       )}
+                    </td>
+                    <td className={`${TD} pr-0`}>
+                      <MenuAcoes
+                        fonte={i.fonte}
+                        itemId={i.id}
+                        rotulo={i.objeto}
+                        finalizada={etapaFinal(etapa)}
+                        finalizacao={i.finalizacao}
+                        responsaveis={responsaveis}
+                      />
                     </td>
                   </tr>
                 )

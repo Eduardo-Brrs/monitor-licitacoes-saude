@@ -1,5 +1,6 @@
 import Link from 'next/link'
-import { IconeEstrela } from '@/components/icons'
+import { BotoesEtapaLinha } from '@/components/boletim/botoes-etapa-linha'
+import { etapaDe } from '@/lib/acompanhamento-tipos'
 import type { AvisoDeDiario } from '@/lib/diarios'
 import { formatarDiaMes, prazoEstaCurto } from '@/lib/formato'
 
@@ -13,6 +14,7 @@ type Props = {
   selecionado: boolean
   onSelecionar: () => void
   onFavoritar: () => void
+  onGerenciar: () => void
   onDescartar: () => void
   onAbrir: () => void
 }
@@ -33,12 +35,18 @@ function IconeExterno() {
   )
 }
 
-export function LinhaAviso({ aviso, selecionado, onSelecionar, onFavoritar, onDescartar, onAbrir }: Props) {
-  const { visto, favorito } = aviso
+export function LinhaAviso({ aviso, selecionado, onSelecionar, onFavoritar, onGerenciar, onDescartar, onAbrir }: Props) {
+  const { visto } = aviso
   const judicial = aviso.fonte === 'judicial'
   const prazoCurto = prazoEstaCurto(aviso.dataSessao)
 
-  const metadados = [aviso.entidade, aviso.origem].filter(Boolean) as string[]
+  const metadados = [
+    aviso.entidade,
+    aviso.origem,
+    // Entrou num boletim depois do dia da publicação (boletim pela captura,
+    // 2026-10-06) — sem isso parece publicação de hoje.
+    aviso.dia < aviso.diaDoBoletim ? `publicado ${formatarDiaMes(`${aviso.dia}T12:00:00Z`)}` : null,
+  ].filter(Boolean) as string[]
 
   return (
     <li
@@ -112,24 +120,7 @@ export function LinhaAviso({ aviso, selecionado, onSelecionar, onFavoritar, onDe
         >
           <IconeExterno />
         </a>
-        <button
-          type="button"
-          onClick={onFavoritar}
-          aria-label={favorito ? 'Desfavoritar aviso' : 'Favoritar aviso'}
-          // Tooltip nativo com o atalho: sem ele o ícone sozinho não diz o que
-          // faz, e é o jeito de descobrir o teclado sem ler a faixa de filtros.
-          title={favorito ? 'Tirar dos favoritos (F)' : 'Favoritar (F)'}
-          aria-pressed={favorito}
-          className={`flex size-10 items-center justify-center rounded-control border ${
-            favorito
-              ? 'border-accent bg-accent-soft text-accent-strong'
-              : visto
-                ? 'border-[#e0ddd6] bg-surface text-muted hover:text-ink'
-                : 'border-border-strong bg-surface text-ink'
-          }`}
-        >
-          <IconeEstrela size={17} />
-        </button>
+        <BotoesEtapaLinha etapa={etapaDe(aviso)} visto={visto} onFavoritar={onFavoritar} onGerenciar={onGerenciar} />
         <button
           type="button"
           onClick={onDescartar}

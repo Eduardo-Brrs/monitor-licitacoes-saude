@@ -1,7 +1,9 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { etapaAoFavoritar } from '@/lib/acompanhamento-tipos'
 import { sql } from '@/lib/db'
+import { etapaAtual, gravarEtapa } from '@/lib/etapa'
 import { FONTES_DIARIO, type FonteDiario } from '@/lib/diarios'
 
 // Mesmas regras de app/actions/edital.ts, na tabela diario_status: toda ação
@@ -20,14 +22,7 @@ function revalidarInterface() {
 
 export async function alternarFavoritoAviso(fonte: FonteDiario, avisoId: number) {
   validar(fonte, avisoId)
-  await sql`
-    INSERT INTO diario_status (fonte, aviso_id, favorito, visto_em)
-    VALUES (${fonte}, ${avisoId}, TRUE, NOW())
-    ON CONFLICT (fonte, aviso_id) DO UPDATE
-    SET favorito = NOT diario_status.favorito,
-        visto_em = COALESCE(diario_status.visto_em, NOW()),
-        atualizado_em = NOW()
-  `
+  await gravarEtapa(fonte, avisoId, etapaAoFavoritar(await etapaAtual(fonte, avisoId)))
   revalidarInterface()
 }
 

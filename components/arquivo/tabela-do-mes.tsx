@@ -33,7 +33,7 @@ export function TabelaDoMes({ dias }: { dias: DiaDoArquivo[] }) {
             Não vistos
           </th>
           <th scope="col" className={`${TH} text-right`}>
-            Favoritados
+            Acompanhados
           </th>
           <th scope="col" className={TH}>
             <span className="sr-only">Abrir</span>

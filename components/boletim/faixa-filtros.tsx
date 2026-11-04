@@ -32,7 +32,7 @@ export function FaixaFiltros() {
       <Chip>Diários: DOE/AL · AMA · Maceió</Chip>
       <div className="grow" />
       <span className="font-mono text-[11.5px] text-muted">
-        J / K navegar · F favoritar · D descartar
+        J / K navegar · F favoritar · G gerenciar · D descartar
       </span>
     </div>
   )

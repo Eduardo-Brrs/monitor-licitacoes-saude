@@ -1,5 +1,5 @@
 import { listarAcompanhamento, ordenarAcompanhamento, passaNoFiltro } from '@/lib/acompanhamento'
-import { ehFiltroAcompanhamento, rotuloDoStatus } from '@/lib/acompanhamento-tipos'
+import { ehFiltroAcompanhamento, ROTULO_RESULTADO, rotuloDoStatus } from '@/lib/acompanhamento-tipos'
 import { dataCsv, montarCsv, numeroCsv, respostaCsv } from '@/lib/csv'
 import { diaEmMaceio } from '@/lib/formato'
 
@@ -17,6 +17,9 @@ export async function GET(request: Request) {
   const csv = montarCsv(
     [
       'Status',
+      'Resultado',
+      'Valor ganho (R$)',
+      'Observação da finalização',
       'Favorito',
       'Origem',
       'Objeto',
@@ -31,6 +34,9 @@ export async function GET(request: Request) {
     ],
     itens.map((i) => [
       rotuloDoStatus(i),
+      i.finalizacao ? ROTULO_RESULTADO[i.finalizacao.resultado] : '',
+      numeroCsv(i.finalizacao?.valorGanho ?? null),
+      i.finalizacao?.observacao ?? '',
       i.favorito ? 'sim' : '',
       i.tipo ?? 'PNCP',
       i.objeto,

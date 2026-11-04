@@ -1,4 +1,5 @@
 import { sql } from '@/lib/db'
+import { avaliarZero, type AlertaZero, type ExecucaoFonte } from '@/lib/saude-zero'
 
 // Status das fontes (2026-09-28): quando uma captura para de funcionar,
 // ninguém percebe — os diários municipais ficaram 2 dias com "fetch failed"
@@ -16,6 +17,7 @@ export interface FonteMonitorada {
   descricao: string
   frequencia: string
   limiteHoras: number // sem execução bem-sucedida há mais que isso = problema
+  alertaZero?: AlertaZero // quando responder sem nenhum item é problema (lib/saude-zero.ts)
 }
 
 export const FONTES_MONITORADAS: FonteMonitorada[] = [
@@ -25,6 +27,7 @@ export const FONTES_MONITORADAS: FonteMonitorada[] = [
     descricao: 'Pregões e dispensas de Alagoas',
     frequencia: '3 vezes por dia',
     limiteHoras: 18,
+    alertaZero: 'na_rodada',
   },
   {
     tipo: 'sync_doe',
@@ -32,6 +35,7 @@ export const FONTES_MONITORADAS: FonteMonitorada[] = [
     descricao: 'Aquisições judiciais (AMGESP)',
     frequencia: '3 vezes por dia',
     limiteHoras: 18,
+    alertaZero: { diasUteis: 2 },
   },
   {
     tipo: 'sync_doe_licitacoes',
@@ -39,6 +43,7 @@ export const FONTES_MONITORADAS: FonteMonitorada[] = [
     descricao: 'Pregões estaduais (reserva do PNCP)',
     frequencia: '3 vezes por dia',
     limiteHoras: 18,
+    alertaZero: { diasUteis: 2 },
   },
   {
     tipo: 'sync_doe_cotacoes',
@@ -46,6 +51,7 @@ export const FONTES_MONITORADAS: FonteMonitorada[] = [
     descricao: 'Cotações estaduais (SESAU, AMGESP e outros órgãos)',
     frequencia: '3 vezes por dia',
     limiteHoras: 18,
+    alertaZero: { diasUteis: 2 },
   },
   {
     tipo: 'sync_diarios_municipais',
@@ -53,6 +59,7 @@ export const FONTES_MONITORADAS: FonteMonitorada[] = [
     descricao: 'AMA e Diário de Maceió',
     frequencia: '3 vezes por dia',
     limiteHoras: 18,
+    alertaZero: 'na_rodada',
   },
   {
     tipo: 'verificar_itens',
@@ -73,6 +80,13 @@ export const FONTES_MONITORADAS: FonteMonitorada[] = [
     nome: 'Acompanhamento',
     descricao: 'Resultado, ata e contrato dos favoritados',
     frequencia: 'a cada 30 min (na prática, a cada poucas horas)',
+    limiteHoras: 10,
+  },
+  {
+    tipo: 'ligar_avisos',
+    nome: 'Avisos → edital do PNCP',
+    descricao: 'Procura no PNCP o edital (com anexos) dos avisos de diário acompanhados',
+    frequencia: 'a cada 30 min, junto do acompanhamento',
     limiteHoras: 10,
   },
 ]
@@ -103,16 +117,16 @@ export async function saudeDasFontes(): Promise<SaudeDaFonte[]> {
   const tipos = FONTES_MONITORADAS.map((f) => f.tipo)
   // Últimas 20 execuções de cada tipo — basta pra contar falhas seguidas.
   const linhas = (await sql`
-    SELECT tipo, started_at, erro
+    SELECT tipo, started_at, erro, total_api
     FROM (
-      SELECT tipo, started_at, erro,
+      SELECT tipo, started_at, erro, total_api,
              ROW_NUMBER() OVER (PARTITION BY tipo ORDER BY started_at DESC) AS n
       FROM sync_runs
       WHERE tipo = ANY(${tipos})
     ) r
     WHERE n <= 20
     ORDER BY tipo, started_at DESC
-  `) as { tipo: string; started_at: string; erro: string | null }[]
+  `) as ({ tipo: string } & ExecucaoFonte)[]
 
   const [{ ok_por_tipo }] = (await sql`
     SELECT json_object_agg(tipo, ultimo) AS ok_por_tipo
@@ -131,7 +145,10 @@ export async function saudeDasFontes(): Promise<SaudeDaFonte[]> {
     const horasSemSucesso = ultimoSucesso ? (agora - Date.parse(ultimoSucesso)) / 3_600_000 : Infinity
     let estado: EstadoFonte = 'ok'
     let motivo: string | null = null
-    if (horasSemSucesso > fonte.limiteHoras) {
+    if (execucoes.length === 0) {
+      // Rotina nova, entre o deploy e a primeira rodada do cron: não é falha.
+      motivo = 'aguardando a primeira execução'
+    } else if (horasSemSucesso > fonte.limiteHoras) {
       estado = 'problema'
       motivo = ultimoSucesso
         ? `sem captura bem-sucedida há ${Math.floor(horasSemSucesso)}h`
@@ -142,6 +159,13 @@ export async function saudeDasFontes(): Promise<SaudeDaFonte[]> {
     } else if (falhasSeguidas > 0) {
       estado = 'instavel'
       motivo = falhasSeguidas === 1 ? 'a última execução falhou' : `${falhasSeguidas} falhas seguidas`
+    }
+    if (estado !== 'problema') {
+      const zero = avaliarZero(fonte.alertaZero, execucoes)
+      if (zero) {
+        estado = 'problema'
+        motivo = zero
+      }
     }
 
     return { ...fonte, ultimaExecucao, ultimoSucesso, falhasSeguidas, ultimoErro, estado, motivo }

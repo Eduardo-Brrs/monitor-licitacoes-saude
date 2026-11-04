@@ -1,16 +1,13 @@
 name: Sync Diarios Municipais
 
 on:
-  schedule:
-    # Mesma cadência do Sync PNCP e do DOE-AL (9h/14h/20h Maceió), deslocada
-    # 10 min pra não bater as três rotas na Vercel no mesmo minuto.
-    - cron: '10 12 * * *'
-    - cron: '10 17 * * *'
-    - cron: '10 23 * * *'
+  # Agendamento migrou pro cron-job.org em 2026-10-02 (ver docs/operacao.md).
+  # Fica só o disparo manual, como reserva.
   workflow_dispatch: {}
 
 jobs:
   sync:
+    if: github.repository != 'Eduardo-Brrs/monitor-licitacoes-saude'  # cópia pública: sem secrets, não roda
     runs-on: ubuntu-latest
     steps:
       - name: Chamar /api/sync-diarios-municipais

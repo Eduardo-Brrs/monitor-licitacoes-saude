@@ -1,7 +1,9 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { etapaAoFavoritar } from '@/lib/acompanhamento-tipos'
 import { sql } from '@/lib/db'
+import { etapaAtual, gravarEtapa } from '@/lib/etapa'
 
 // Toda ação de triagem também marca o edital como visto: se você favoritou ou
 // descartou, você olhou. O visto_em usa COALESCE pra preservar o instante da
@@ -15,14 +17,19 @@ function revalidarInterface() {
   revalidatePath('/', 'layout')
 }
 
+// Estrela é a etapa "Favoritada": acender apaga o status (etapa única,
+// lib/etapa.ts), apagar tira do acompanhamento.
 export async function alternarFavorito(editalId: number) {
+  if (!Number.isInteger(editalId)) throw new Error('edital inválido')
+  await gravarEtapa('pncp', editalId, etapaAoFavoritar(await etapaAtual('pncp', editalId)))
+  revalidarInterface()
+}
+
+// Abriu o edital = viu a movimentação nova do PNCP (o "novo" do Andamento).
+export async function marcarMovimentacaoVista(editalId: number) {
+  if (!Number.isInteger(editalId)) throw new Error('edital inválido')
   await sql`
-    INSERT INTO edital_status (edital_id, favorito, visto_em)
-    VALUES (${editalId}, TRUE, NOW())
-    ON CONFLICT (edital_id) DO UPDATE
-    SET favorito = NOT edital_status.favorito,
-        visto_em = COALESCE(edital_status.visto_em, NOW()),
-        atualizado_em = NOW()
+    UPDATE edital_status SET movimentacao_vista_em = NOW() WHERE edital_id = ${editalId}
   `
   revalidarInterface()
 }

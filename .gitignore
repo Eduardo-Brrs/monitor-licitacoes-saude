@@ -42,3 +42,6 @@ next-env.d.ts
 
 .vercel
 .env*
+
+# planilhas da empresa (custo, margem, fornecedor) - não versionar
+docs/*.xlsx

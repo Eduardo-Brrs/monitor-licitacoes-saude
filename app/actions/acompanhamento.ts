@@ -2,8 +2,10 @@
 
 import { revalidatePath } from 'next/cache'
 import { sql } from '@/lib/db'
-import { ehFonteItem, ehStatusInterno, type FonteItem, type StatusInterno } from '@/lib/acompanhamento-tipos'
+import { ehEtapa, ehFonteItem, ehResultado, type Etapa, type FonteItem, type Resultado } from '@/lib/acompanhamento-tipos'
 import { verificarEdital } from '@/lib/acompanhamento-pncp'
+import { gravarEtapa, gravarFinalizacao } from '@/lib/etapa'
+import { FONTES_LIGAVEIS, procurarEditalDoAviso, type FonteLigavel } from '@/lib/ligar-avisos'
 
 // Server Action é endpoint público — valida tudo que chega da tela.
 function validarItem(fonte: FonteItem, itemId: number) {
@@ -17,47 +19,86 @@ function revalidarInterface() {
   revalidatePath('/', 'layout')
 }
 
-// Definir status também marca como visto (mesma regra da triagem: se mexeu,
-// olhou). null tira o status.
-export async function definirStatusInterno(fonte: FonteItem, itemId: number, status: StatusInterno | null) {
+// Etapa = favorito e status juntos, numa escada só (lib/etapa.ts grava as
+// duas colunas e registra a mudança na linha do tempo). null tira do
+// acompanhamento.
+export async function definirEtapa(fonte: FonteItem, itemId: number, etapa: Etapa | null) {
   validarItem(fonte, itemId)
-  if (status !== null && !ehStatusInterno(status)) throw new Error(`status inválido: ${status}`)
+  if (etapa !== null && !ehEtapa(etapa)) throw new Error(`etapa inválida: ${etapa}`)
+  await gravarEtapa(fonte, itemId, etapa)
+  revalidarInterface()
+}
 
-  if (fonte === 'pncp') {
-    await sql`
-      INSERT INTO edital_status (edital_id, status_interno, visto_em)
-      VALUES (${itemId}, ${status}, NOW())
-      ON CONFLICT (edital_id) DO UPDATE
-      SET status_interno = ${status},
-          visto_em = COALESCE(edital_status.visto_em, NOW()),
-          atualizado_em = NOW()
-    `
-  } else {
-    await sql`
-      INSERT INTO diario_status (fonte, aviso_id, status_interno, visto_em)
-      VALUES (${fonte}, ${itemId}, ${status}, NOW())
-      ON CONFLICT (fonte, aviso_id) DO UPDATE
-      SET status_interno = ${status},
-          visto_em = COALESCE(diario_status.visto_em, NOW()),
-          atualizado_em = NOW()
-    `
+// Janela "Finalizar" (2026-10-27, pedido do usuário): resultado, valor total ganho e
+// observação. lib/etapa.ts decide se vira "ganha" ou "finalizada".
+export async function finalizar(
+  fonte: FonteItem,
+  itemId: number,
+  resultado: Resultado,
+  valorGanho: number | null,
+  observacao: string
+) {
+  validarItem(fonte, itemId)
+  if (!ehResultado(resultado)) throw new Error(`resultado inválido: ${resultado}`)
+  if (valorGanho !== null && !(Number.isFinite(valorGanho) && valorGanho >= 0 && valorGanho < 1e12)) {
+    throw new Error('valor ganho inválido')
+  }
+  const obs = observacao.trim()
+  await gravarFinalizacao(fonte, itemId, resultado, valorGanho, obs === '' ? null : obs)
+  revalidarInterface()
+}
+
+// Notas da linha do tempo (2026-10-23): cada "Salvar nota" é uma entrada
+// nova, com data e autor — nada é reescrito. tarefaId = resposta a uma
+// tarefa; concluir = "Responder e concluir".
+export async function criarNota(
+  fonte: FonteItem,
+  itemId: number,
+  texto: string,
+  autorId: number | null,
+  tarefaId: number | null = null,
+  concluir = false
+) {
+  validarItem(fonte, itemId)
+  const limpo = texto.trim()
+  if (limpo === '') throw new Error('nota vazia')
+  if (autorId !== null && !Number.isInteger(autorId)) throw new Error('autor inválido')
+  if (tarefaId !== null && !Number.isInteger(tarefaId)) throw new Error('tarefa inválida')
+
+  // Autor que não existe mais (navegador lembrando um id antigo) vira "sem autor".
+  await sql`
+    INSERT INTO notas (fonte, item_id, texto, autor_id, tarefa_id)
+    VALUES (${fonte}, ${itemId}, ${limpo},
+            (SELECT id FROM responsaveis WHERE id = ${autorId}),
+            (SELECT id FROM tarefas WHERE id = ${tarefaId} AND fonte = ${fonte} AND item_id = ${itemId}))
+  `
+  if (tarefaId !== null && concluir) {
+    await sql`UPDATE tarefas SET concluida_em = NOW() WHERE id = ${tarefaId} AND concluida_em IS NULL`
   }
   revalidarInterface()
 }
 
-// Uma anotação por item, reescrita a cada "Salvar". Texto vazio apaga.
-export async function salvarAnotacao(fonte: FonteItem, itemId: number, texto: string) {
-  validarItem(fonte, itemId)
+// Edição guarda o texto anterior em notas_versoes.
+export async function editarNota(notaId: number, texto: string) {
+  if (!Number.isInteger(notaId)) throw new Error('nota inválida')
   const limpo = texto.trim()
-  if (limpo === '') {
-    await sql`DELETE FROM anotacoes WHERE fonte = ${fonte} AND item_id = ${itemId}`
-  } else {
-    await sql`
-      INSERT INTO anotacoes (fonte, item_id, texto)
-      VALUES (${fonte}, ${itemId}, ${limpo})
-      ON CONFLICT (fonte, item_id) DO UPDATE SET texto = ${limpo}, atualizado_em = NOW()
-    `
-  }
+  if (limpo === '') throw new Error('nota vazia')
+  await sql`
+    WITH anterior AS (
+      INSERT INTO notas_versoes (nota_id, texto)
+      SELECT id, texto FROM notas WHERE id = ${notaId} AND texto <> ${limpo} AND apagada_em IS NULL
+      RETURNING nota_id
+    )
+    UPDATE notas SET texto = ${limpo}, editada_em = NOW()
+    WHERE id IN (SELECT nota_id FROM anterior)
+  `
+  revalidarInterface()
+}
+
+// Apagar só esconde (apagada_em) — o texto continua no banco.
+export async function apagarNota(notaId: number) {
+  if (!Number.isInteger(notaId)) throw new Error('nota inválida')
+  await sql`UPDATE notas SET apagada_em = NOW() WHERE id = ${notaId} AND apagada_em IS NULL`
   revalidarInterface()
 }
 
@@ -101,12 +142,6 @@ export async function verificarAgora(editalId: number): Promise<{ erro: string |
   return { erro: r.erro }
 }
 
-// Vitória detectada por CNPJ é sugestão com confirmação de um clique (regra 6).
-export async function confirmarVitoria(editalId: number) {
-  if (!Number.isInteger(editalId)) throw new Error('edital inválido')
-  await definirStatusInterno('pncp', editalId, 'ganha')
-}
-
 export async function descartarSugestaoVitoria(editalId: number) {
   if (!Number.isInteger(editalId)) throw new Error('edital inválido')
   await sql`
@@ -131,4 +166,17 @@ export async function excluirTarefa(tarefaId: number) {
   if (!Number.isInteger(tarefaId)) throw new Error('tarefa inválida')
   await sql`DELETE FROM tarefas WHERE id = ${tarefaId}`
   revalidarInterface()
+}
+
+// "Procurar no PNCP agora" na tela do aviso — mesma busca do job.
+export async function procurarEditalAgora(
+  fonte: FonteLigavel,
+  avisoId: number
+): Promise<{ numero: string | null; erro: string | null }> {
+  if (!FONTES_LIGAVEIS.includes(fonte) || !Number.isInteger(avisoId)) throw new Error('aviso inválido')
+  const r = await procurarEditalDoAviso(fonte, avisoId, { timeoutMs: 12_000, orcamentoMs: 15_000 }, Date.now() + 40_000)
+  revalidarInterface()
+  if (r.editalId === null) return { numero: null, erro: r.erro }
+  const [e] = (await sql`SELECT numero_controle_pncp FROM editais WHERE id = ${r.editalId}`) as { numero_controle_pncp: string }[]
+  return { numero: e?.numero_controle_pncp ?? null, erro: null }
 }

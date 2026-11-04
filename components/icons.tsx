@@ -42,6 +42,27 @@ export function IconeEstrela(props: IconeProps) {
   )
 }
 
+// "Gerenciar" (vai participar) — bandeira, pra não confundir com a estrela.
+export function IconeGerenciar(props: IconeProps) {
+  return (
+    <Svg {...props}>
+      <path d="M5 21V4" />
+      <path d="M5 4h11l-2 4 2 4H5" />
+    </Svg>
+  )
+}
+
+// Atas e contratos ganhos (2026-10-27) — documento assinado.
+export function IconeAtas(props: IconeProps) {
+  return (
+    <Svg {...props}>
+      <path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z" />
+      <path d="M14 3v5h5" />
+      <path d="m9 14 2 2 4-4" />
+    </Svg>
+  )
+}
+
 export function IconeAcompanhamento(props: IconeProps) {
   return (
     <Svg {...props}>
@@ -75,6 +96,15 @@ export function IconeArquivo(props: IconeProps) {
     <Svg {...props}>
       <rect x="3" y="5" width="18" height="16" rx="2" />
       <path d="M3 10h18M8 3v4M16 3v4" />
+    </Svg>
+  )
+}
+
+export function IconeBusca(props: IconeProps) {
+  return (
+    <Svg {...props}>
+      <circle cx="11" cy="11" r="6" />
+      <path d="m20 20-4.4-4.4" />
     </Svg>
   )
 }

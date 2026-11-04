@@ -10,7 +10,7 @@ Sistema interno de uma distribuidora de material médico-hospitalar, focado só 
 
 Fontes (revisto com o Eduardo em 2026-09-24): editais vêm do **PNCP**; além deles, oportunidades que **só aparecem nos diários oficiais** — aquisição judicial e pregões estaduais do DOE/AL, avisos de licitação/dispensa/cotação das prefeituras (diário da AMA e de Maceió). Os dois tipos ficam no **mesmo boletim do dia, em seções separadas** ("Editais · PNCP" e "Só nos diários oficiais"), nunca misturados na mesma lista. Ver tela 01.
 
-> A tela "Avisos judiciais" original (intimação/citação/sentença contra a empresa, "enviar ao jurídico") foi **retirada em 2026-09-24** a pedido do Eduardo: o "judicial" que interessa é a *aquisição* judicial — oportunidade de venda —, não processo contra a Distribuidora Exemplo.
+> A tela "Avisos judiciais" original (intimação/citação/sentença contra a empresa, "enviar ao jurídico") foi **retirada em 2026-09-24** a pedido do Eduardo: o "judicial" que interessa é a *aquisição* judicial — oportunidade de venda —, não processo contra a empresa. `telas/05-avisos-judiciais.html` fica só como referência visual antiga.
 
 ## Tokens
 
@@ -45,7 +45,7 @@ Raios: 7px em botões e inputs, 10px em cards, 5px em badges. Alvos clicáveis d
 
 Barra lateral fixa de 224px com três grupos rotulados:
 
-- **Licitações**: Caixa de entrada (contador de não vistos: editais acumulados + avisos relevantes de diário dos últimos 7 dias), Favoritos, Acompanhamento, Tarefas (contador).
+- **Licitações**: Caixa de entrada (contador de não vistos: editais acumulados + avisos relevantes de diário dos últimos 7 dias), Pesquisa, Favoritos, Acompanhamento, Tarefas (contador).
 - **Arquivo**: Boletins anteriores.
 
 (O grupo "Diário Oficial · DOE/AL" com "Avisos judiciais" saiu em 2026-09-24 — os avisos de diário entraram no boletim.)
@@ -75,6 +75,8 @@ Cada edital é uma linha com **exatamente seis informações**: objeto (link par
 - **Etiqueta de origem em toda linha**: "PNCP" no edital; no aviso, o selo de tipo (Aquisição judicial em `--warn-soft`/`--warn-strong`; Cotação, Dispensa, Licitação, Pregão neutros) e o diário nos metadados. A etiqueta existe porque o clique leva a lugares diferentes: edital abre o detalhe (itens, anexos), aviso abre a **tela do aviso** (`/aviso/[fonte]/[id]`, desde 2026-09-28 — antes abria direto a publicação, e o Eduardo estranhou cair num PDF). A tela do aviso tem o texto publicado, o bloco **"Onde está o edital?"** explicando por tipo por que não há itens/anexos (aquisição judicial: TR pedido por e-mail; cotação: antes da licitação; licitação/dispensa municipal e pregão estadual: edital no portal, entra como edital quando chegar ao PNCP), os e-mails e links citados no texto, e a mesma lateral do edital. A seta da linha continua abrindo a publicação original.
 - Linha de aviso: texto (objeto ou, na aquisição judicial, os itens da página), quem publicou, diário com edição/página, processo em mono, data da sessão quando existe. Coluna de valor fica vazia (diário não informa), pra manter as datas alinhadas com as dos editais.
 - Linha de edital ganha a **contagem de anexos** ("3 anexos") nos metadados — exceção deliberada às "seis informações", pedida pelo Eduardo: anexo é o que se lê pra decidir.
+- **Boletim pelo dia da captura** (2026-10-06): cada item entra no boletim do dia em que o sistema o capturou (a partir das 18h conta pro dia seguinte, sábado e domingo vão pra segunda), não no da publicação. Quando a publicação é anterior, a linha (edital ou aviso) ganha "publicado dd/mm" nos metadados — segunda exceção deliberada, sem ela o item atrasado parece publicação do dia.
+- **Órgão com sigla** (2026-10-06, como no ConLicitação): "FUNDEPES · FUNDACAO UNIVERSITARIA…" na linha, no detalhe, no acompanhamento e na busca. Tabela por CNPJ em `lib/orgaos.ts`.
 - Cabeçalho: "N dentro dos seus filtros · M não vistos", somando as duas origens.
 - **Fora dos filtros**: aviso de diário sem palavra-chave (aquisição judicial e cotação da SMS de Maceió contam sempre como dentro). Rodapé: "X publicações do dia ficaram fora dos seus filtros (Y do PNCP, Z dos diários) · mostrar os Z dos diários". A busca atravessa tudo, inclusive os de fora.
 - **Textos sem a palavra "filtros"** (2026-09-28, Eduardo): "filtros" dava a entender que o usuário tinha filtrado algo, e o sistema inteiro já é de um nicho só. Na tela: "N da área da saúde · M não vistos"; rodapé "X publicações de outros assuntos (sem produto da área da saúde) ficaram de fora"; faixa "Monitorando" em vez de "Filtros"; no arquivo, colunas "Publicados em AL" e "Da área da saúde". No código os nomes internos (`nosFiltros`, `foraDosFiltros`) continuam.
@@ -105,9 +107,19 @@ Mesma rota do detalhe, no estado em que o PNCP já tem resultado ou contrato.
 - **Contrato**: fornecedor, valor global, assinatura, vigência.
 - Lateral com **dois campos distintos**: "Status interno" (editável, manual) e "Situação no PNCP" (somente leitura, vindo do sync). Linha do tempo mostrando a data do fato e a data em que o sync capturou. Próxima verificação e botão "Verificar agora".
 
+### 05 · Avisos judiciais — `telas/05-avisos-judiciais.html` (RETIRADA em 2026-09-24, ver "Contexto")
+
+Não reaproveitar o card de edital. Cada aviso mostra: tipo (Intimação, Despacho, Citação, Sentença), número do processo em mono, vara/comarca, **trecho publicado com o termo monitorado destacado**, o prazo citado no texto e caderno/página.
+
+Ações: enviar ao jurídico e arquivar. Mesmo modelo visto/não visto e navegação por dia do boletim de editais. Faixa no topo com os termos monitorados.
+
 ### 06 · Boletins anteriores — `telas/06-arquivo.html`
 
-Navegação por mês (a aba "Avisos judiciais" saiu com a tela 05; avisos de diário contam junto do dia do boletim). Tabela de dias: data, publicados, nos filtros, não vistos (em `--warn` quando > 0), favoritados, link para abrir. Busca que atravessa todos os meses.
+Navegação por mês (a aba "Avisos judiciais" saiu com a tela 05; avisos de diário contam junto do dia do boletim). Tabela de dias: data, publicados, nos filtros, não vistos (em `--warn` quando > 0), favoritados, link para abrir. A busca do cabeçalho leva pra tela 07 (abertas e encerradas), desde 2026-10-06.
+
+### 07 · Pesquisa de licitações — `telas/07-pesquisa.html`
+
+O "Encontrar licitação" do ConLicitação (pedido do usuário, 2026-10-06). Formulário GET (tudo na URL, funciona sem JS): texto (objeto, itens, anotações; frase exata), segmentos (nenhum marcado = todos), estados em pílulas com atalhos Só Alagoas / Nordeste / Todos, cidade com sugestão do IBGE, esfera, órgão (nome, sigla ou CNPJ), número, modalidade (Pregão, Dispensa, Outras desmarcada), origem, datas de publicação e de abertura/prazo, só abertas, com anexos, nosso status. Lista única ordenada pelo próximo prazo: o que está no sistema (com ponto de não visto e estrela) e o que só existe no portal do PNCP (marca tracejada "fora do sistema", título abre o PNCP, estrela traz pro sistema já favoritado — fica no boletim do dia da publicação). Prazo: "abre dd/mm" se a abertura ainda vem, senão "até dd/mm" (encerramento), "até ~dd/mm" quando estimado; ano aparece quando não é o atual. PNCP fora do ar: faixa `--warn-soft` e a parte do sistema aparece igual. "Carregar mais" lê mais 100 do PNCP (até 300). Export CSV com a mesma busca.
 
 ## Regras de comportamento e dados
 
@@ -136,3 +148,4 @@ O email/aviso diário ainda não foi desenhado. Login e permissões não existem
 5. Boletins anteriores.
 6. ~~Avisos judiciais.~~ Substituído pela seção "Só nos diários oficiais" no boletim (feito em 2026-09-24).
 7. Edital concluído (depende do job de re-sync e do histórico de situação).
+8. Pesquisa de licitações (feito em 2026-10-06).

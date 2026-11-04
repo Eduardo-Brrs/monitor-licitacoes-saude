@@ -2,7 +2,7 @@ import { sql } from '@/lib/db'
 import { buscarArquivos, buscarItens, type LimitesPncp, type PncpArquivo, type PncpItem } from '@/lib/pncp'
 
 // Cópia salva dos anexos e itens de um edital (colunas em `editais`, ver
-// lib/schema.sql). O PNCP cai com frequência, e edital sem anexo na tela não
+// migrations/001_estado_inicial.sql). O PNCP cai com frequência, e edital sem anexo na tela não
 // serve pra nada — então o que já conseguimos buscar uma vez fica guardado e
 // é mostrado mesmo com o PNCP fora do ar.
 

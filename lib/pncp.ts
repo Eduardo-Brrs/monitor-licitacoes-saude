@@ -19,19 +19,22 @@ const MAX_TENTATIVAS = 3
 const BACKOFF_INICIAL_MS = 500
 
 // Teto de tempo pra TODAS as tentativas de uma mesma chamada, checado antes de
-// cada nova tentativa contando o pior caso dela (mais um TIMEOUT_MS inteiro).
+// cada nova tentativa.
 // Existe por causa do maxDuration=60 das rotas: sem teto, 3 tentativas de 20s
 // estourariam o limite da Vercel e a função seria morta antes de registrar a
 // falha em sync_runs — o mesmo problema que o timeout de 20s resolveu em
 // 2026-09-02. Em 25s o pior caso de uma chamada fica em ~25s, então até duas
 // páginas sequenciais cabem nos 60s com folga.
 //
-// Efeito prático: falha rápida (502, conexão recusada) sobra orçamento e é
-// repetida; falha por timeout consome o orçamento sozinha e não é. Isso bate
-// com o comportamento observado — 502 é intermitente e passa na tentativa
-// seguinte, enquanto timeout é outage de verdade do lado deles, que dura horas
-// e não melhora repetindo 20s depois.
+// Nova tentativa usa como limite o que sobra do orçamento (até TIMEOUT_MS), e
+// só acontece se sobrar pelo menos TENTATIVA_MINIMA_MS. Antes exigia um
+// TIMEOUT_MS inteiro livre, e isso deixava sem repetir o caso mais comum de
+// "fetch failed": o PNCP às vezes não aceita a conexão nova e o Node desiste
+// em 10s (UND_ERR_CONNECT_TIMEOUT) — 10s + 20s passava do orçamento, mas a
+// tentativa seguinte costuma passar em poucos segundos (reproduzido em
+// 2026-10-22; é o que derrubava a rodada das 20h do sync quase toda noite).
 const ORCAMENTO_RETRY_MS = 25_000
+const TENTATIVA_MINIMA_MS = 3_000
 
 // 5xx é instabilidade deles e 429 é rate limit (já visto ao bater muitas
 // chamadas seguidas) — os dois costumam passar na tentativa seguinte. Erro 4xx
@@ -53,34 +56,57 @@ export interface LimitesPncp {
   orcamentoMs?: number
 }
 
+function tentativas(n: number): string {
+  return n > 1 ? `${n} tentativas` : '1 tentativa'
+}
+
 async function fetchComTimeout(url: string, limites: LimitesPncp = {}): Promise<Response> {
   const timeoutMs = limites.timeoutMs ?? TIMEOUT_MS
   const orcamentoMs = limites.orcamentoMs ?? ORCAMENTO_RETRY_MS
   const inicio = Date.now()
+
+  let limiteDaTentativa = timeoutMs
 
   for (let tentativa = 1; ; tentativa++) {
     let resposta: Response | undefined
     let erro: unknown
 
     try {
-      resposta = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) })
+      // O corpo é lido aqui dentro porque o limite de tempo vale também pra
+      // leitura dele: o PNCP às vezes manda o cabeçalho e trava no meio do
+      // corpo, e o res.json() do chamador estourava fora deste try — sem
+      // repetir e com a mensagem crua "The operation was aborted due to
+      // timeout" na tela de status (sync de 2026-10-22 às 14h).
+      const bruta = await fetch(url, { signal: AbortSignal.timeout(limiteDaTentativa) })
+      const semCorpo = bruta.status === 204 || bruta.status === 205 || bruta.status === 304
+      resposta = new Response(semCorpo ? null : await bruta.arrayBuffer(), {
+        status: bruta.status,
+        statusText: bruta.statusText,
+        headers: bruta.headers,
+      })
       if (resposta.ok || !statusTransitorio(resposta.status)) return resposta
     } catch (err) {
       erro = err
     }
 
-    const temOrcamento = Date.now() - inicio + timeoutMs <= orcamentoMs
-    if (tentativa >= MAX_TENTATIVAS || !temOrcamento) {
+    const espera = BACKOFF_INICIAL_MS * 2 ** (tentativa - 1)
+    const sobra = orcamentoMs - (Date.now() - inicio) - espera
+    if (tentativa >= MAX_TENTATIVAS || sobra < TENTATIVA_MINIMA_MS) {
       // Devolve a resposta de erro pro chamador montar a mensagem de sempre
       // (com status e corpo), em vez de inventar uma mensagem nova aqui.
       if (resposta) return resposta
       if (erro instanceof Error && erro.name === 'TimeoutError') {
-        throw new Error(`PNCP não respondeu em ${timeoutMs / 1000}s (timeout): ${url}`)
+        throw new Error(`PNCP não respondeu em ${Math.round((Date.now() - inicio) / 1000)}s (timeout, ${tentativas(tentativa)}): ${url}`)
+      }
+      const causa = (erro as { cause?: { code?: string } } | undefined)?.cause?.code
+      if (causa === 'UND_ERR_CONNECT_TIMEOUT') {
+        throw new Error(`PNCP não respondeu ao pedido de conexão (${tentativas(tentativa)}): ${url}`)
       }
       throw erro
     }
 
-    await esperar(BACKOFF_INICIAL_MS * 2 ** (tentativa - 1))
+    await esperar(espera)
+    limiteDaTentativa = Math.min(timeoutMs, sobra)
   }
 }
 
@@ -158,7 +184,8 @@ export interface BuscarContratacoesParams {
 
 export async function buscarContratacoes(
   params: BuscarContratacoesParams,
-  pagina: number
+  pagina: number,
+  limites?: LimitesPncp
 ): Promise<PncpBuscaResponse> {
   const searchParams = new URLSearchParams({
     dataInicial: params.dataInicial,
@@ -177,7 +204,13 @@ export async function buscarContratacoes(
   }
 
   const url = `${BASE_CONSULTA}/contratacoes/publicacao?${searchParams.toString()}`
-  const res = await fetchComTimeout(url)
+  const res = await fetchComTimeout(url, limites)
+
+  // Nenhuma compra no filtro: 204 sem corpo. Nunca acontecia no sync (AL
+  // inteiro sempre tem compra), mas filtrando por cidade é comum (2026-10-23).
+  if (res.status === 204) {
+    return { data: [], totalRegistros: 0, totalPaginas: 0, numeroPagina: pagina, paginasRestantes: 0, empty: true }
+  }
 
   if (!res.ok) {
     throw new Error(`PNCP respondeu ${res.status} ao buscar contratações: ${await res.text()}`)
@@ -387,4 +420,108 @@ export async function buscarAtasDaCompra(
 ): Promise<PncpAta[]> {
   const url = `${BASE_ARQUIVOS}/orgaos/${cnpj}/compras/${ano}/${sequencial}/atas?pagina=1`
   return lerListaOuVazia<PncpAta>(await fetchComTimeout(url, limites), 'atas')
+}
+
+// Histórico da compra (2026-10-07, tela Andamento): uma linha por mudança
+// que o órgão fez no PNCP. Sem parâmetro devolve tudo (testado: 107 de 107).
+// A maior parte é ruído de publicação ("Item de Contratação / Inclusão"); o
+// que interessa é documento novo depois da publicação (errata, aviso de
+// adiamento, resposta a esclarecimento, ata da sessão) e retificação da
+// contratação — o filtro fica em lib/acompanhamento-pncp.ts.
+export interface PncpHistorico {
+  logManutencaoDataInclusao: string
+  categoriaLogManutencaoNome: string // Contratação, Documento de Contratação, Item de Contratação...
+  tipoLogManutencaoNome: string // Inclusão, Retificação, Exclusão
+  justificativa?: string | null
+  documentoTipo?: string | null
+  documentoTitulo?: string | null
+  documentoSequencial?: number | null
+  itemNumero?: number | null
+}
+
+export async function buscarHistoricoDaCompra(
+  cnpj: string,
+  ano: number,
+  sequencial: number,
+  limites?: LimitesPncp
+): Promise<PncpHistorico[]> {
+  const url = `${BASE_ARQUIVOS}/orgaos/${cnpj}/compras/${ano}/${sequencial}/historico`
+  return lerListaOuVazia<PncpHistorico>(await fetchComTimeout(url, limites), 'histórico')
+}
+
+// Uma compra só, pelo trio da chave — mesmo formato de /contratacoes/publicacao,
+// então dá pra gravar com salvarEdital. Usado pelo "trazer pro sistema" da
+// Pesquisa (2026-10-06).
+export async function buscarCompra(
+  cnpj: string,
+  ano: number,
+  sequencial: number,
+  limites?: LimitesPncp
+): Promise<PncpContratacao> {
+  const url = `${BASE_CONSULTA}/orgaos/${cnpj}/compras/${ano}/${sequencial}`
+  const res = await fetchComTimeout(url, limites)
+  if (!res.ok) throw new Error(`PNCP respondeu ${res.status} ao buscar a compra: ${await res.text()}`)
+  return res.json()
+}
+
+// Busca do próprio portal pncp.gov.br (a que o site usa — não documentada,
+// mesmo princípio da API do DOE-AL). Texto livre que olha também os itens,
+// vários estados, modalidade, cidade (código IBGE) e "recebendo proposta".
+// Testada em 2026-10-06: separador de lista é "|" (vírgula devolve 0), filtro
+// de esfera não responde (filtrar do nosso lado), não tem filtro de data,
+// tam_pagina=100 funciona. Datas vêm em horário de Brasília sem fuso.
+const BASE_BUSCA = 'https://pncp.gov.br/api/search/'
+
+export interface PncpResultadoPortal {
+  numero_controle_pncp: string
+  title: string
+  description: string
+  item_url: string
+  orgao_cnpj: string
+  orgao_nome: string
+  unidade_nome?: string | null
+  unidade_codigo?: string | null // UASG, ex.: 926703
+  esfera_id: string | null // M, E, F (N = não se aplica)
+  municipio_nome: string | null
+  uf: string | null
+  modalidade_licitacao_id: string | null
+  modalidade_licitacao_nome: string | null
+  numero?: string | null
+  ano?: string | null
+  data_publicacao_pncp: string | null
+  data_fim_vigencia: string | null // fim do recebimento de propostas
+  valor_global: number | null
+  cancelado?: boolean
+}
+
+export interface BuscaPortalParams {
+  q?: string
+  ufs: string[]
+  modalidades?: number[]
+  municipioIbge?: string
+  somenteAbertas: boolean
+  pagina: number
+  tamanhoPagina?: number
+}
+
+export async function buscarNoPortalPncp(
+  params: BuscaPortalParams,
+  limites?: LimitesPncp
+): Promise<{ total: number; itens: PncpResultadoPortal[] }> {
+  const busca = new URLSearchParams({
+    tipos_documento: 'edital',
+    ordenacao: '-data',
+    pagina: String(params.pagina),
+    tam_pagina: String(params.tamanhoPagina ?? 100),
+    status: params.somenteAbertas ? 'recebendo_proposta' : 'todos',
+  })
+  if (params.q) busca.set('q', params.q)
+  if (params.ufs.length) busca.set('ufs', params.ufs.join('|'))
+  if (params.modalidades?.length) busca.set('modalidades', params.modalidades.join('|'))
+  if (params.municipioIbge) busca.set('municipios', params.municipioIbge)
+
+  const res = await fetchComTimeout(`${BASE_BUSCA}?${busca.toString()}`, limites)
+  if (!res.ok) throw new Error(`PNCP respondeu ${res.status} na busca: ${(await res.text()).slice(0, 200)}`)
+  const corpo = (await res.json()) as { total?: number; items?: PncpResultadoPortal[] }
+  return { total: corpo.total ?? 0, itens: corpo.items ?? [] }
 }

@@ -12,6 +12,8 @@ import {
   type DiarioMunicipal,
 } from '@/lib/diario-municipal'
 import { palavrasChaveDeDiario } from '@/lib/keywords'
+import { ordenarPorFalha, rodarFila } from '@/lib/fila'
+import { FILA_DIARIOS_MATERIAS, falhasDaFila, registroDaFila } from '@/lib/fila-falhas'
 
 export const maxDuration = 60
 
@@ -97,12 +99,14 @@ export async function GET(request: Request) {
     .filter(([chave]) => !jaSalvos.has(chave))
     .sort(([, a], [, b]) => b.cartao.dataCirculacao.localeCompare(a.cartao.dataCirculacao))
 
-  let tentados = 0
-  for (const [, { diario, cartao }] of novos) {
-    if (Date.now() - startedAt.getTime() > ORCAMENTO_MS) break
-    tentados++
-
-    try {
+  const chaveDaMateria = ([chave]: (typeof novos)[number]) => chave
+  const falhas = await falhasDaFila(FILA_DIARIOS_MATERIAS)
+  const fila = await rodarFila({
+    itens: ordenarPorFalha(novos, chaveDaMateria, falhas),
+    chave: chaveDaMateria,
+    orcamentoMs: ORCAMENTO_MS - (Date.now() - startedAt.getTime()),
+    registro: registroDaFila(FILA_DIARIOS_MATERIAS, falhas),
+    processar: async ([, { diario, cartao }]) => {
       const materia = await baixarMateria(diario, cartao.codigo)
       const palavrasChave = palavrasChaveDeDiario(textoParaKeyword(materia), materia.objeto ?? materia.corpo)
 
@@ -123,11 +127,9 @@ export async function GET(request: Request) {
         totalNovos++
         if (palavrasChave.length > 0) totalMatched++
       }
-    } catch (err) {
-      // Uma matéria com problema não derruba as outras — fica pra próxima run.
-      erros.push(`${diario.slug}/${cartao.codigo}: ${err instanceof Error ? err.message : String(err)}`)
-    }
-  }
+    },
+  })
+  for (const falha of fila.falhas) erros.push(`${falha.chave}: ${falha.erro}`)
 
   const erro = erros.length > 0 ? erros.slice(0, 5).join(' | ') : null
   const finishedAt = new Date()
@@ -138,7 +140,7 @@ export async function GET(request: Request) {
   `
 
   // Matérias novas que ficaram pro próximo run por causa do orçamento de tempo.
-  const corpo = { totalApi, totalMatched, totalNovos, pendentesRestantes: novos.length - tentados }
+  const corpo = { totalApi, totalMatched, totalNovos, pendentesRestantes: fila.naoTentados }
 
   if (erro) {
     return NextResponse.json({ erro, ...corpo }, { status: 500 })

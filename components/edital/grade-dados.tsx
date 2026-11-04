@@ -1,5 +1,6 @@
 import { nomeDoPortal, type EditalDetalhe } from '@/lib/edital'
 import { formatarDataHora, formatarValorCompleto } from '@/lib/formato'
+import { EXPLICACAO_PRAZO_ESTIMADO } from '@/lib/prazo'
 
 function Campo({ rotulo, children }: { rotulo: string; children: React.ReactNode }) {
   return (
@@ -27,7 +28,11 @@ export function GradeDados({ edital, situacaoAcompanhada }: { edital: EditalDeta
       </Campo>
       <Campo rotulo="Modo de disputa">{edital.modoDisputa ?? '—'}</Campo>
       <Campo rotulo="Propostas até">
-        {formatarDataHora(edital.encerramentoProposta ?? edital.aberturaProposta)}
+        {edital.encerramentoProposta || edital.aberturaProposta || !edital.prazoEstimado ? (
+          formatarDataHora(edital.encerramentoProposta ?? edital.aberturaProposta)
+        ) : (
+          <span title={EXPLICACAO_PRAZO_ESTIMADO}>~{formatarDataHora(edital.prazoEstimado)} (estimado)</span>
+        )}
       </Campo>
       <Campo rotulo="Amparo legal">{edital.amparoLegal ?? '—'}</Campo>
       <Campo rotulo="Situação no PNCP">{situacaoAcompanhada ?? edital.situacao ?? '—'}</Campo>

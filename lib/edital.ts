@@ -1,4 +1,6 @@
 import { sql } from '@/lib/db'
+import { rotuloDoOrgao } from '@/lib/orgaos'
+import { prazoEstimadoDispensa } from '@/lib/prazo'
 
 export interface EditalDetalhe {
   id: number
@@ -18,6 +20,8 @@ export interface EditalDetalhe {
   dataPublicacao: string | null
   aberturaProposta: string | null
   encerramentoProposta: string | null
+  // Dispensa sem data no PNCP: publicação + 3 dias úteis (lib/prazo.ts).
+  prazoEstimado: string | null
   modoDisputa: string | null
   amparoLegal: string | null
   linkSistemaOrigem: string | null
@@ -78,7 +82,7 @@ export async function buscarEditalPorNumero(
     id: l.id as number,
     numeroControlePncp: l.numero_controle_pncp as string,
     objeto: l.objeto_compra as string,
-    orgao: l.orgao_razao_social as string | null,
+    orgao: rotuloDoOrgao(l.orgao_cnpj as string | null, l.orgao_razao_social as string | null),
     orgaoCnpj: l.orgao_cnpj as string,
     municipio: l.municipio_nome as string | null,
     uf: l.uf as string | null,
@@ -92,6 +96,12 @@ export async function buscarEditalPorNumero(
     dataPublicacao: (l.data_publicacao_pncp as string | null) ?? null,
     aberturaProposta: (l.data_abertura_proposta as string | null) ?? null,
     encerramentoProposta: (l.data_encerramento_proposta as string | null) ?? null,
+    prazoEstimado: prazoEstimadoDispensa({
+      modalidade: l.modalidade_nome as string | null,
+      aberturaProposta: (l.data_abertura_proposta as string | null) ?? null,
+      encerramentoProposta: (l.data_encerramento_proposta as string | null) ?? null,
+      publicacao: (l.data_publicacao_pncp as string | null) ?? null,
+    }),
     modoDisputa: l.modo_disputa as string | null,
     amparoLegal: l.amparo_legal as string | null,
     linkSistemaOrigem: l.link_sistema_origem as string | null,

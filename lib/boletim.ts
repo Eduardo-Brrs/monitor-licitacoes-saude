@@ -1,19 +1,22 @@
+import { ehStatusInterno, type StatusInterno } from '@/lib/acompanhamento-tipos'
 import { sql } from '@/lib/db'
+import { diaEmMaceio } from '@/lib/formato'
+import { rotuloDoOrgao } from '@/lib/orgaos'
+import { prazoEstimadoDispensa } from '@/lib/prazo'
 
-// As datas de publicação chegam do PNCP como meia-noite de Brasília (gravadas
-// como 03:00Z), então o ::date do Postgres em UTC já devolve o dia certo do
-// ponto de vista de quem usa o sistema em Maceió — não precisa de conversão
-// de fuso nas consultas abaixo.
+// Cada item entra no boletim do dia em que foi CAPTURADO (coluna boletim_dia,
+// 2026-10-06), não no dia de publicação — ver dia_do_boletim em
+// migrations/001_estado_inicial.sql. A data de publicação continua na linha quando é outra.
 
 // Dias que têm boletim: com edital do PNCP dentro dos filtros ou com aviso
 // de diário (seção "Só nos diários", 2026-09-24) — um dia de PNCP fora do ar
 // ainda tem o que mostrar pelos diários.
 export const DIAS_COM_BOLETIM = sql`
-  SELECT data_publicacao_pncp::date AS dia FROM editais
-  UNION SELECT publication_date FROM doe_al_matches
-  UNION SELECT publication_date FROM doe_al_licitacoes
-  UNION SELECT publication_date FROM doe_al_cotacoes
-  UNION SELECT data_circulacao FROM diario_municipal_materias
+  SELECT boletim_dia AS dia FROM editais
+  UNION SELECT boletim_dia FROM doe_al_matches
+  UNION SELECT boletim_dia FROM doe_al_licitacoes
+  UNION SELECT boletim_dia FROM doe_al_cotacoes
+  UNION SELECT boletim_dia FROM diario_municipal_materias
 `
 
 // O boletim mais recente é o último dia que teve conteúdo — não
@@ -32,7 +35,7 @@ export async function contarNaoVistos(dia: string): Promise<number> {
     SELECT COUNT(*)::int AS n
     FROM editais e
     LEFT JOIN edital_status s ON s.edital_id = e.id
-    WHERE e.data_publicacao_pncp::date = ${dia}::date
+    WHERE e.boletim_dia = ${dia}::date
       AND s.visto_em IS NULL
       AND s.descartado_em IS NULL
   `) as { n: number }[]
@@ -67,19 +70,30 @@ export interface EditalDoBoletim {
   anoCompra: number
   valorEstimado: number | null
   aberturaProposta: string | null
+  // YYYY-MM-DD. A linha mostra "publicado dd/mm" quando é anterior ao dia do
+  // boletim — o edital chegou atrasado (checagem de itens, PNCP fora do ar).
+  publicadoEm: string
+  boletimDia: string
+  // Dispensa sem data no PNCP: publicação + 3 dias úteis (lib/prazo.ts).
+  prazoEstimado: string | null
   visto: boolean
   favorito: boolean
+  statusInterno: StatusInterno | null
   // Quantos anexos a cópia salva tem (lib/detalhe-pncp.ts); null = ainda não
   // conseguimos buscar no PNCP.
   anexos: number | null
 }
 
 function mapearEdital(linha: Record<string, unknown>): EditalDoBoletim {
+  // Encerramento = limite da proposta, o dia da sessão (pedido do usuário, 2026-10-14);
+  // no PNCP "abertura" é só o início do recebimento.
+  const aberturaProposta =
+    (linha.data_encerramento_proposta as string | null) ?? (linha.data_abertura_proposta as string | null) ?? null
   return {
     id: linha.id as number,
     numeroControlePncp: linha.numero_controle_pncp as string,
     objeto: linha.objeto_compra as string,
-    orgao: linha.orgao_razao_social as string | null,
+    orgao: rotuloDoOrgao(linha.orgao_cnpj as string | null, linha.orgao_razao_social as string | null),
     municipio: linha.municipio_nome as string | null,
     uf: linha.uf as string | null,
     modalidade: linha.modalidade_nome as string | null,
@@ -87,9 +101,17 @@ function mapearEdital(linha: Record<string, unknown>): EditalDoBoletim {
     anoCompra: linha.ano_compra as number,
     // NUMERIC volta como string no driver — converter aqui evita "R$ NaN".
     valorEstimado: linha.valor_total_estimado === null ? null : Number(linha.valor_total_estimado),
-    aberturaProposta: (linha.data_abertura_proposta as string | null) ?? null,
+    aberturaProposta,
+    prazoEstimado: prazoEstimadoDispensa({
+      modalidade: linha.modalidade_nome as string | null,
+      aberturaProposta,
+      publicacao: linha.data_publicacao_pncp as string | null,
+    }),
+    publicadoEm: diaEmMaceio(new Date(linha.data_publicacao_pncp as string)),
+    boletimDia: new Date(linha.boletim_dia as string).toISOString().slice(0, 10),
     visto: linha.visto_em !== null,
     favorito: linha.favorito as boolean,
+    statusInterno: ehStatusInterno(linha.status_interno) ? linha.status_interno : null,
     anexos: linha.anexos === null ? null : Number(linha.anexos),
   }
 }
@@ -106,6 +128,7 @@ export async function buscarEditaisDoDia(dia: string): Promise<EditalDoBoletim[]
       e.numero_controle_pncp,
       e.objeto_compra,
       e.orgao_razao_social,
+      e.orgao_cnpj,
       e.municipio_nome,
       e.uf,
       e.modalidade_nome,
@@ -113,16 +136,20 @@ export async function buscarEditaisDoDia(dia: string): Promise<EditalDoBoletim[]
       e.ano_compra,
       e.valor_total_estimado,
       e.data_abertura_proposta,
+      e.data_encerramento_proposta,
+      e.data_publicacao_pncp,
+      e.boletim_dia,
       s.visto_em,
       COALESCE(s.favorito, FALSE) AS favorito,
+      s.status_interno,
       jsonb_array_length(e.arquivos_json) AS anexos
     FROM editais e
     LEFT JOIN edital_status s ON s.edital_id = e.id
-    WHERE e.data_publicacao_pncp::date = ${dia}::date
+    WHERE e.boletim_dia = ${dia}::date
       AND s.descartado_em IS NULL
     ORDER BY
       (s.visto_em IS NOT NULL),
-      e.data_abertura_proposta ASC NULLS LAST,
+      COALESCE(e.data_encerramento_proposta, e.data_abertura_proposta) ASC NULLS LAST,
       e.id
   `) as Record<string, unknown>[]
 
@@ -139,6 +166,7 @@ export async function buscarDescartadosDoDia(dia: string): Promise<EditalDoBolet
       e.numero_controle_pncp,
       e.objeto_compra,
       e.orgao_razao_social,
+      e.orgao_cnpj,
       e.municipio_nome,
       e.uf,
       e.modalidade_nome,
@@ -146,12 +174,16 @@ export async function buscarDescartadosDoDia(dia: string): Promise<EditalDoBolet
       e.ano_compra,
       e.valor_total_estimado,
       e.data_abertura_proposta,
+      e.data_encerramento_proposta,
+      e.data_publicacao_pncp,
+      e.boletim_dia,
       s.visto_em,
       COALESCE(s.favorito, FALSE) AS favorito,
+      s.status_interno,
       jsonb_array_length(e.arquivos_json) AS anexos
     FROM editais e
     JOIN edital_status s ON s.edital_id = e.id
-    WHERE e.data_publicacao_pncp::date = ${dia}::date
+    WHERE e.boletim_dia = ${dia}::date
       AND s.descartado_em IS NOT NULL
     ORDER BY s.descartado_em DESC
   `) as Record<string, unknown>[]
@@ -178,13 +210,13 @@ export async function resumoDoDia(dia: string): Promise<ResumoDoDia> {
         COUNT(*) FILTER (WHERE s.visto_em IS NULL)::int AS nao_vistos
       FROM editais e
       LEFT JOIN edital_status s ON s.edital_id = e.id
-      WHERE e.data_publicacao_pncp::date = ${dia}::date
+      WHERE e.boletim_dia = ${dia}::date
         AND s.descartado_em IS NULL
     `,
     sql`
       SELECT COUNT(*)::int AS total
       FROM itens_pendentes
-      WHERE (contratacao_json->>'dataPublicacaoPncp')::date = ${dia}::date
+      WHERE boletim_dia = ${dia}::date
     `,
   ])
 

@@ -1,0 +1,17 @@
+name: CI
+on:
+  push:                  # roda a cada push
+  pull_request:          # e a cada PR
+jobs:
+  test:
+    runs-on: ubuntu-latest          # máquina Linux do GitHub
+    steps:
+      - uses: actions/checkout@v4   # baixa seu código
+      - uses: actions/setup-node@v4 # instala o Node
+        with:
+          node-version: 24          # mesma versão da máquina do Eduardo (v24.16.0)
+          cache: npm                # deixa as próximas execuções mais rápidas
+      - run: npm ci                 # instala as dependências
+      - run: npx next typegen       # gera os tipos das rotas (PageProps), que localmente vêm do .next
+      - run: npx tsc --noEmit       # checa os tipos sem gerar arquivos
+      - run: npm test               # roda motor + regressão

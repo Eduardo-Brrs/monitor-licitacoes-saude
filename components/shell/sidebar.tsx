@@ -1,7 +1,8 @@
 import { Nav } from '@/components/shell/nav'
 import { contarNaoVistosAcumulado, ultimoSyncEm } from '@/lib/boletim'
 import { contarAvisosNaoVistosRecentes } from '@/lib/diarios'
-import { contarTarefasUrgentes } from '@/lib/acompanhamento'
+import { contarMovimentacoesNovas, contarTarefasUrgentes } from '@/lib/acompanhamento'
+import { contarAtasVencendo } from '@/lib/atas'
 import { fontesComProblema } from '@/lib/saude'
 import Link from 'next/link'
 
@@ -19,25 +20,32 @@ function formatarHora(data: Date): string {
 export async function Sidebar() {
   // Badge = editais não vistos (acumulado) + avisos relevantes não vistos dos
   // últimos 7 dias — ver contarAvisosNaoVistosRecentes pro porquê da janela.
-  const [editaisNaoVistos, avisosNaoVistos, sincronizadoEm, tarefasUrgentes, comProblema] = await Promise.all([
+  const [editaisNaoVistos, avisosNaoVistos, sincronizadoEm, tarefasUrgentes, comProblema, movimentacoesNovas, atasVencendo] = await Promise.all([
     contarNaoVistosAcumulado(),
     contarAvisosNaoVistosRecentes(),
     ultimoSyncEm(),
     contarTarefasUrgentes(),
     fontesComProblema(),
+    contarMovimentacoesNovas(),
+    contarAtasVencendo(),
   ])
   const naoVistos = editaisNaoVistos + avisosNaoVistos
 
   return (
     <nav className="flex w-56 shrink-0 flex-col gap-7 bg-sidebar px-4 py-6 text-[#edebe5]">
       <div className="flex flex-col gap-0.5 pl-2">
-        <span className="font-display text-[22px] font-semibold -tracking-[0.01em]">Boletim</span>
+        <span className="font-display text-[22px] font-semibold -tracking-[0.01em]">Licitações</span>
         <span className="text-[11.5px] uppercase tracking-[0.04em] text-[#9a9a93]">
           {process.env.NOME_EMPRESA ?? "Licitações"}
         </span>
       </div>
 
-      <Nav naoVistos={naoVistos} tarefasUrgentes={tarefasUrgentes} />
+      <Nav
+        naoVistos={naoVistos}
+        tarefasUrgentes={tarefasUrgentes}
+        movimentacoesNovas={movimentacoesNovas}
+        atasVencendo={atasVencendo}
+      />
 
       <div className="grow" />
 

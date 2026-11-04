@@ -1,3 +1,4 @@
+import { MarcarMovimentacaoVista } from '@/components/edital/marcar-movimentacao-vista'
 import { notFound } from 'next/navigation'
 import { Anexos } from '@/components/edital/anexos'
 import { BannerVitoria } from '@/components/edital/banner-vitoria'
@@ -6,7 +7,8 @@ import { GradeDados } from '@/components/edital/grade-dados'
 import { ItensInteresse } from '@/components/edital/itens-interesse'
 import { LateralEdital } from '@/components/edital/lateral'
 import { ContratosEAtas, ResultadoPorItem } from '@/components/edital/resultado'
-import { SituacaoPncp, type EventoParaTela } from '@/components/edital/situacao-pncp'
+import { SituacaoPncp } from '@/components/edital/situacao-pncp'
+import { LinhaDoTempo } from '@/components/linha-do-tempo/linha-do-tempo'
 import { dadosDaLateral } from '@/lib/acompanhamento'
 import { carregarAcompanhamento, HORAS_ENTRE_VERIFICACOES, NOME_EMPRESA } from '@/lib/acompanhamento-pncp'
 // Itens e anexos vêm da cópia salva no banco, atualizada pelo PNCP quando ele
@@ -15,6 +17,8 @@ import { carregarDetalheParaTela } from '@/lib/detalhe-pncp'
 import { buscarEditalPorNumero, nomeDoPortal } from '@/lib/edital'
 import { formatarDataCompleta, formatarValorCompleto } from '@/lib/formato'
 import { encontrarPalavrasChave } from '@/lib/keywords'
+import { carregarLinhaDoTempo, eventosDoPncp } from '@/lib/linha-do-tempo'
+import type { EventoDaLinhaDoTempo } from '@/lib/acompanhamento-pncp'
 
 // O driver devolve TIMESTAMPTZ como Date, apesar do tipo string em EditalDetalhe.
 function paraIso(valor: string | Date | null): string | null {
@@ -50,16 +54,20 @@ export default async function PaginaEdital({ params }: PageProps<'/edital/[numer
   const { retrato, vitoria } = acompanhamento
 
   // Linha do tempo: fatos capturados do PNCP + publicação e abertura, que já
-  // vêm do próprio edital.
-  const eventos: EventoParaTela[] = [
+  // vêm do próprio edital; notas, etapa e tarefas entram em carregarLinhaDoTempo.
+  const doPncp: EventoDaLinhaDoTempo[] = [
     ...acompanhamento.eventos,
+    ...(edital.encerramentoProposta
+      ? [{ tipo: 'abertura', descricao: 'Limite das propostas (sessão)', dataFato: paraIso(edital.encerramentoProposta), capturadoEm: null }]
+      : []),
     ...(edital.aberturaProposta
-      ? [{ tipo: 'abertura', descricao: 'Abertura das propostas', dataFato: paraIso(edital.aberturaProposta), capturadoEm: null }]
+      ? [{ tipo: 'abertura', descricao: 'Início do recebimento de propostas', dataFato: paraIso(edital.aberturaProposta), capturadoEm: null }]
       : []),
     ...(edital.dataPublicacao
       ? [{ tipo: 'publicacao', descricao: 'Edital publicado no PNCP', dataFato: paraIso(edital.dataPublicacao), capturadoEm: null }]
       : []),
-  ].sort((a, b) => (b.dataFato ?? '').localeCompare(a.dataFato ?? ''))
+  ]
+  const linhaDoTempo = await carregarLinhaDoTempo('pncp', edital.id, eventosDoPncp(doPncp))
 
   const proximaEm = acompanhamento.verificadoEm
     ? new Date(Date.parse(acompanhamento.verificadoEm) + HORAS_ENTRE_VERIFICACOES * 3_600_000).toISOString()
@@ -84,9 +92,13 @@ export default async function PaginaEdital({ params }: PageProps<'/edital/[numer
     <>
       <CabecalhoEdital edital={edital} />
 
+      {acompanhamento.movimentacaoNova && <MarcarMovimentacaoVista editalId={edital.id} />}
+
       {mostrarBanner && (
         <BannerVitoria
           editalId={edital.id}
+          objeto={edital.objeto}
+          valorHomologado={vitoria.valorHomologado}
           titulo={
             vitoria.contrato
               ? `Contrato encontrado no PNCP com o CNPJ da ${NOME_EMPRESA}`
@@ -101,6 +113,7 @@ export default async function PaginaEdital({ params }: PageProps<'/edital/[numer
           {retrato && <ResultadoPorItem retrato={retrato} />}
           {retrato && <ContratosEAtas retrato={retrato} />}
           <GradeDados edital={edital} situacaoAcompanhada={acompanhamento.situacao} />
+          <LinhaDoTempo fonte="pncp" itemId={edital.id} eventos={linhaDoTempo} responsaveis={lateral.responsaveis} />
           <ItensInteresse itens={itens} deInteresse={deInteresse} removidaDoPncp={removidaDoPncp} />
           <Anexos
             arquivos={arquivos}
@@ -115,7 +128,7 @@ export default async function PaginaEdital({ params }: PageProps<'/edital/[numer
 
         <LateralEdital
           editalId={edital.id}
-          favorito={edital.favorito}
+          objeto={edital.objeto}
           linkSistemaOrigem={edital.linkSistemaOrigem}
           portal={portal}
           dados={lateral}
@@ -124,7 +137,6 @@ export default async function PaginaEdital({ params }: PageProps<'/edital/[numer
               editalId={edital.id}
               acompanhado={acompanhado}
               situacao={acompanhamento.situacao}
-              eventos={eventos}
               verificadoEm={acompanhamento.verificadoEm}
               proximaEm={proximaEm}
               erro={acompanhamento.erro}

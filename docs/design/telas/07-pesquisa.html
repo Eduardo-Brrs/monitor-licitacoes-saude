@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Pesquisa de licitações</title>
+<!--
+  Tela 07 — Pesquisa de licitações (2026-10-06). Base: mockup do Eduardo
+  ("7 · Pesquisa de licitações-html.zip"), com os 5 ajustes aprovados:
+  1. segmentos reais de lib/keywords.ts
+  2. menu lateral atual + item "Pesquisa"
+  3. etiqueta de origem + marca "fora do sistema"
+  4. modalidade "Outras" desmarcada por padrão
+  5. padrão = só abertas, sem data; "carregar mais" no fim
+  Mais: faixa de aviso quando o PNCP não responde (a parte do banco continua).
+-->
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&amp;family=IBM+Plex+Sans:wght@400;500;600&amp;family=IBM+Plex+Mono:wght@500&amp;display=swap" rel="stylesheet">
+<style>
+body { margin: 0; font-family: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif; background: #F6F5F1; }
+a { color: #1B5E4B; } a:hover { color: #14402F; }
+.lab { font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; color: #74797F; }
+.fld { box-sizing: border-box; width: 100%; height: 40px; padding: 0 11px; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; color: #16181D; background: #FFFFFF; border: 1px solid #D9D6CE; border-radius: 7px; }
+.sec { box-sizing: border-box; padding: 16px 18px; border-top: 1px solid #EDEBE5; display: flex; flex-direction: column; gap: 11px; }
+.chk { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: #16181D; cursor: pointer; }
+.chk input { accent-color: #1B5E4B; width: 15px; height: 15px; margin: 0; }
+.uf { height: 32px; min-width: 42px; padding: 0 11px; font-family: 'IBM Plex Sans', sans-serif; font-size: 12.5px; font-weight: 500; color: #16181D; background: #FFFFFF; border: 1px solid #D9D6CE; border-radius: 20px; cursor: pointer; }
+.uf[aria-pressed="true"] { background: #16181D; border-color: #16181D; color: #FFFFFF; }
+.lnk { font-family: 'IBM Plex Sans', sans-serif; font-size: 12.5px; color: #1B5E4B; background: none; border: none; padding: 4px 2px; cursor: pointer; text-decoration: underline; }
+.mono { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+.nav a { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: 7px; color: #C9C7C0; text-decoration: none; font-size: 13.5px; }
+.nav a.ativo { background: #262A31; color: #FFFFFF; font-weight: 500; }
+.tag { flex-shrink: 0; margin-top: 1px; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; border: 1px solid #D9D6CE; background: #FBFAF7; color: #5B6069; }
+.tag.judicial { border-color: transparent; background: #FBEDE7; color: #8E3818; }
+.fora { flex-shrink: 0; margin-top: 1px; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; border: 1px dashed #9A9A93; color: #5B6069; }
+.linha { display: flex; align-items: center; gap: 14px; padding: 15px 18px; background: #FFFFFF; border: 1px solid #E4E2DC; border-radius: 10px; }
+.ponto { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; font-size: 12.5px; color: #5B6069; }
+.estrela { width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; background: #FFFFFF; border: 1px solid #D9D6CE; border-radius: 7px; color: #16181D; cursor: pointer; }
+.nota { position: absolute; background: #FFF6C9; border: 1px solid #E5D27A; color: #4A4116; font-size: 11.5px; line-height: 1.35; padding: 7px 9px; border-radius: 6px; width: 210px; box-shadow: 0 2px 6px rgba(0,0,0,.08); }
+</style>
+</head>
+<body>
+
+<div style="position: relative; width: 1280px; height: 1400px; box-sizing: border-box; display: flex; background: #F6F5F1; color: #16181D; overflow: hidden;">
+
+  <nav class="nav" style="width: 224px; flex-shrink: 0; box-sizing: border-box; background: #16181D; color: #EDEBE5; padding: 24px 16px; display: flex; flex-direction: column; gap: 28px;">
+    <div style="display: flex; flex-direction: column; gap: 2px; padding-left: 8px;">
+      <span style="font-family: 'Fraunces', Georgia, serif; font-size: 22px; font-weight: 600; letter-spacing: -0.01em;">Boletim</span>
+      <span style="font-size: 11.5px; color: #9A9A93; letter-spacing: 0.04em; text-transform: uppercase;">Distribuidora Exemplo</span>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <span style="font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #8A8A83; padding: 0 10px 4px;">Licitações</span>
+      <a href="01-boletim-do-dia.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 13h4l2 3h4l2-3h4"></path><path d="M4 13 6.5 5h11L20 13v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"></path></svg>
+        <span style="flex-grow: 1;">Caixa de entrada</span>
+        <span class="mono" style="font-size: 11px; background: #1B5E4B; color: #FFFFFF; padding: 2px 7px; border-radius: 20px;">12</span>
+      </a>
+      <a href="07-pesquisa.html" class="ativo">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m20 20-4.4-4.4"></path></svg>
+        <span style="flex-grow: 1;">Pesquisa</span>
+      </a>
+      <a href="03-acompanhamento.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 4 2.4 5 5.6.8-4 3.9 1 5.5-5-2.7-5 2.7 1-5.5-4-3.9 5.6-.8z"></path></svg>
+        <span style="flex-grow: 1;">Favoritos</span>
+      </a>
+      <a href="03-acompanhamento.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="5" height="16" rx="1"></rect><rect x="10" y="4" width="5" height="11" rx="1"></rect><rect x="17" y="4" width="4" height="7" rx="1"></rect></svg>
+        <span style="flex-grow: 1;">Acompanhamento</span>
+      </a>
+      <a href="03-acompanhamento.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l2 2 4-4"></path><rect x="3" y="4" width="18" height="16" rx="2"></rect></svg>
+        <span style="flex-grow: 1;">Tarefas</span>
+        <span class="mono" style="font-size: 11px; color: #E3B7A4;">3</span>
+      </a>
+    </div>
+    <div style="display: flex; flex-direction: column; gap: 3px;">
+      <span style="font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; color: #8A8A83; padding: 0 10px 4px;">Arquivo</span>
+      <a href="06-arquivo.html">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2"></rect><path d="M3 10h18M8 3v4M16 3v4"></path></svg>
+        <span style="flex-grow: 1;">Boletins anteriores</span>
+      </a>
+    </div>
+  </nav>
+
+  <main style="flex-grow: 1; min-width: 0; box-sizing: border-box; display: flex; flex-direction: column;">
+
+    <header style="box-sizing: border-box; padding: 22px 24px 16px; display: flex; align-items: flex-end; gap: 16px; border-bottom: 1px solid #E4E2DC; background: #FBFAF7;">
+      <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 4px;">
+        <h1 style="margin: 0; font-family: 'Fraunces', Georgia, serif; font-size: 26px; font-weight: 600; letter-spacing: -0.01em;">Pesquisa de licitações</h1>
+        <p style="margin: 0; font-size: 13px; color: #5B6069;">Procura no que o sistema já capturou e direto no PNCP, em qualquer estado. O boletim diário continua só de Alagoas.</p>
+      </div>
+      <button type="button" class="lnk" style="font-size: 13px;">Limpar tudo</button>
+    </header>
+
+    <div style="flex-grow: 1; min-height: 0; box-sizing: border-box; padding: 16px 24px; display: flex; flex-direction: column; gap: 16px;">
+
+      <form style="box-sizing: border-box; background: #FFFFFF; border: 1px solid #E4E2DC; border-radius: 10px; display: flex; flex-direction: column;">
+
+        <div style="box-sizing: border-box; padding: 16px 18px; display: flex; align-items: flex-end; gap: 14px;">
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 6px;">
+            <label class="lab" for="objeto">Objeto, itens e anotações</label>
+            <input id="objeto" class="fld" type="search" value="cadeira de rodas" placeholder="ex.: curativo, alginato, cateter">
+          </div>
+          <label class="chk" style="height: 40px;"><input type="checkbox"> frase exata</label>
+          <button type="button" style="height: 40px; padding: 0 20px; display: inline-flex; align-items: center; gap: 8px; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; font-weight: 500; color: #FFFFFF; background: #1B5E4B; border: 1px solid #1B5E4B; border-radius: 7px; cursor: pointer;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6"></circle><path d="m20 20-4.4-4.4"></path></svg>
+            Buscar
+          </button>
+        </div>
+        <p style="margin: -6px 18px 12px; font-size: 12px; color: #74797F;">Ignora acentos e maiúsculas. Procura no objeto, nos itens de cada edital e nas suas anotações. Órgão também pela sigla (FUNDEPES, AMGESP…).</p>
+
+        <div class="sec">
+          <div style="display: flex; align-items: baseline; gap: 10px;">
+            <span class="lab">Segmentos</span>
+            <span style="font-size: 12px; color: #74797F;">nenhum marcado = todos (inclusive o que não bate keyword nenhuma)</span>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 8px 22px;">
+            <label class="chk"><input type="checkbox"> Materiais médico-hospitalares</label>
+            <label class="chk"><input type="checkbox"> Equipamentos hospitalares</label>
+            <label class="chk"><input type="checkbox"> Medicamentos</label>
+            <label class="chk"><input type="checkbox"> Gases</label>
+            <label class="chk"><input type="checkbox"> Filmes radiológicos</label>
+            <label class="chk"><input type="checkbox"> Dieta enteral/parenteral</label>
+            <label class="chk"><input type="checkbox"> Higiene e limpeza</label>
+            <label class="chk"><input type="checkbox"> Captura ampla</label>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <span class="lab">Estados</span>
+            <button type="button" class="lnk">Só Alagoas</button>
+            <button type="button" class="lnk">Nordeste</button>
+            <button type="button" class="lnk">Todos</button>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 7px;">
+            <button type="button" class="uf" aria-pressed="true">AL</button>
+            <button type="button" class="uf" aria-pressed="false">PE</button>
+            <button type="button" class="uf" aria-pressed="false">SE</button>
+            <button type="button" class="uf" aria-pressed="false">BA</button>
+            <button type="button" class="uf" aria-pressed="false">PB</button>
+            <button type="button" class="uf" aria-pressed="false">RN</button>
+            <button type="button" class="uf" aria-pressed="false">CE</button>
+            <button type="button" class="uf" aria-pressed="false">PI</button>
+            <button type="button" class="uf" aria-pressed="false">MA</button>
+            <span style="width: 1px; height: 32px; background: #E4E2DC; margin: 0 4px;" aria-hidden="true"></span>
+            <select class="fld" style="width: 190px; height: 32px; font-size: 12.5px; padding: 0 8px;" aria-label="Outros estados">
+              <option>+ outros estados…</option>
+            </select>
+          </div>
+          <div style="display: flex; gap: 14px; padding-top: 4px;">
+            <div style="width: 300px; display: flex; flex-direction: column; gap: 6px;">
+              <label class="lab" for="cidade">Cidade</label>
+              <input id="cidade" class="fld" type="text" placeholder="todas as cidades dos estados marcados" list="cidades">
+            </div>
+            <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 6px;">
+              <span class="lab">Esfera</span>
+              <div style="display: flex; align-items: center; gap: 22px; height: 40px;">
+                <label class="chk"><input type="checkbox" checked> Municipal</label>
+                <label class="chk"><input type="checkbox" checked> Estadual</label>
+                <label class="chk"><input type="checkbox" checked> Federal</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div style="display: flex; gap: 14px;">
+            <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 6px;">
+              <label class="lab" for="orgao">Órgão — nome, sigla ou CNPJ</label>
+              <input id="orgao" class="fld" type="text" placeholder="ex.: FUNDEPES, SESAU ou 12.449.880/0001-67">
+            </div>
+            <div style="width: 260px; display: flex; flex-direction: column; gap: 6px;">
+              <label class="lab" for="numero">Número</label>
+              <input id="numero" class="fld mono" type="text" placeholder="edital ou processo">
+            </div>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div style="display: flex; gap: 40px;">
+            <div style="display: flex; flex-direction: column; gap: 9px;">
+              <span class="lab">Modalidade</span>
+              <div style="display: flex; gap: 22px;">
+                <label class="chk"><input type="checkbox" checked> Pregão</label>
+                <label class="chk"><input type="checkbox" checked> Dispensa</label>
+                <label class="chk" title="Credenciamento, concorrência, inexigibilidade… — a captura automática não olha essas"><input type="checkbox"> Outras (credenciamento, concorrência…)</label>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 9px;">
+              <span class="lab">Origem</span>
+              <div style="display: flex; flex-wrap: wrap; gap: 9px 22px;">
+                <label class="chk"><input type="checkbox" checked> PNCP</label>
+                <label class="chk"><input type="checkbox" checked> Aquisição judicial</label>
+                <label class="chk"><input type="checkbox" checked> Cotação</label>
+                <label class="chk"><input type="checkbox" checked> Diário municipal</label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec">
+          <div style="display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap;">
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <span class="lab">Publicação</span>
+              <div style="display: flex; align-items: center; gap: 7px;">
+                <input class="fld mono" type="date" style="width: 148px;" aria-label="Publicação de">
+                <span style="font-size: 12.5px; color: #74797F;">até</span>
+                <input class="fld mono" type="date" style="width: 148px;" aria-label="Publicação até">
+              </div>
+            </div>
+            <div style="display: flex; gap: 7px; height: 40px; align-items: center;">
+              <button type="button" class="uf" aria-pressed="false">hoje</button>
+              <button type="button" class="uf" aria-pressed="false">ontem</button>
+              <button type="button" class="uf" aria-pressed="false">7 dias</button>
+            </div>
+            <span style="width: 1px; height: 40px; background: #E4E2DC; margin: 0 4px;" aria-hidden="true"></span>
+            <div style="display: flex; flex-direction: column; gap: 6px;">
+              <span class="lab">Abertura / prazo</span>
+              <div style="display: flex; align-items: center; gap: 7px;">
+                <input class="fld mono" type="date" style="width: 148px;" aria-label="Abertura de">
+                <span style="font-size: 12.5px; color: #74797F;">até</span>
+                <input class="fld mono" type="date" style="width: 148px;" aria-label="Abertura até">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sec" style="flex-direction: row; align-items: center; gap: 28px; flex-wrap: wrap;">
+          <label class="chk"><input type="checkbox" checked> Só abertas</label>
+          <label class="chk"><input type="checkbox"> Com anexos</label>
+          <span style="width: 1px; height: 22px; background: #E4E2DC;" aria-hidden="true"></span>
+          <span class="lab">Nosso status</span>
+          <label class="chk"><input type="checkbox"> Favorita</label>
+          <label class="chk"><input type="checkbox"> Gerenciada</label>
+          <label class="chk"><input type="checkbox"> Em andamento</label>
+          <label class="chk"><input type="checkbox"> Finalizada</label>
+          <label class="chk"><input type="checkbox"> Ganha</label>
+        </div>
+      </form>
+
+      <!-- Faixa só quando o PNCP não respondeu: a parte do banco aparece igual. -->
+      <div style="display: flex; align-items: center; gap: 10px; padding: 10px 14px; background: #FBEDE7; border: 1px solid #EBD3C7; border-radius: 8px; font-size: 12.5px; color: #8E3818;">
+        <strong style="font-weight: 600;">O PNCP não respondeu agora.</strong>
+        <span>Mostrando só o que já está no sistema.</span>
+        <button type="button" class="lnk" style="color: #8E3818;">Tentar o PNCP de novo</button>
+      </div>
+
+      <div style="display: flex; align-items: baseline; gap: 12px; padding: 0 2px;">
+        <h2 style="margin: 0; font-family: 'Fraunces', Georgia, serif; font-size: 19px; font-weight: 600;">14 encontrados</h2>
+        <span style="font-size: 12.5px; color: #5B6069;">Alagoas · abertas · 9 no sistema, 5 só no PNCP · ordenados por abertura</span>
+        <div style="flex-grow: 1;"></div>
+        <button type="button" style="height: 34px; padding: 0 13px; font-family: 'IBM Plex Sans', sans-serif; font-size: 12.5px; font-weight: 500; color: #16181D; background: #FFFFFF; border: 1px solid #D9D6CE; border-radius: 7px; cursor: pointer;">Exportar CSV</button>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+
+        <!-- No sistema, não visto: ponto verde, etiqueta PNCP, estrela vazia. -->
+        <div class="linha">
+          <span class="ponto" style="background: #1B5E4B;"></span>
+          <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px;">
+            <div style="display: flex; align-items: flex-start; gap: 8px;">
+              <span class="tag">PNCP</span>
+              <a href="02-edital-detalhe.html" style="color: #16181D; font-size: 15px; font-weight: 600; text-decoration: none; line-height: 1.3;">Equipamentos e Material Permanente</a>
+            </div>
+            <div class="meta"><span>FUNDEPES · FUNDACAO UNIVERSITARIA DE DESENV…</span><span>·</span><span>Maceió/AL</span><span>·</span><span>Dispensa nº 104241.2026/2026</span><span>·</span><span>1 anexo</span></div>
+          </div>
+          <span class="mono" style="width: 118px; text-align: right; font-size: 14px;">—</span>
+          <span style="width: 92px; text-align: right; font-size: 12.5px; font-weight: 500; color: #A8431F;" title="Estimado: publicação + 3 dias úteis">até ~07/10</span>
+          <button type="button" class="estrela" aria-label="Favoritar"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 4 2.4 5 5.6.8-4 3.9 1 5.5-5-2.7-5 2.7 1-5.5-4-3.9 5.6-.8z"></path></svg></button>
+        </div>
+
+        <!-- Só no PNCP: sem ponto (não existe "visto" ainda), marca tracejada. Estrela = trazer pro sistema + favoritar. -->
+        <div class="linha" style="position: relative;">
+          <span class="ponto"></span>
+          <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px;">
+            <div style="display: flex; align-items: flex-start; gap: 8px;">
+              <span class="tag">PNCP</span>
+              <span class="fora" title="Não está no sistema — a captura automática não pegou">fora do sistema</span>
+              <a href="https://pncp.gov.br" style="color: #16181D; font-size: 15px; font-weight: 600; text-decoration: none; line-height: 1.3;">Aquisição de cadeira de rodas motorizada para o CER ↗</a>
+            </div>
+            <div class="meta"><span>MUNICIPIO DE SAO MIGUEL DOS CAMPOS</span><span>·</span><span>São Miguel dos Campos/AL</span><span>·</span><span>Dispensa nº 57/2026</span></div>
+          </div>
+          <span class="mono" style="width: 118px; text-align: right; font-size: 14px;">R$ 38.900</span>
+          <span style="width: 92px; text-align: right; font-size: 12.5px; color: #5B6069;">abre 14/10</span>
+          <button type="button" class="estrela" aria-label="Trazer pro sistema e favoritar" title="Trazer pro sistema e favoritar (ganha anexos, acompanhamento e tarefas)"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 4 2.4 5 5.6.8-4 3.9 1 5.5-5-2.7-5 2.7 1-5.5-4-3.9 5.6-.8z"></path></svg></button>
+        </div>
+
+        <!-- No sistema, já visto e favoritado. -->
+        <div class="linha" style="background: #FBFAF7; border-color: #E9E7E1;">
+          <span class="ponto"></span>
+          <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px;">
+            <div style="display: flex; align-items: flex-start; gap: 8px;">
+              <span class="tag">PNCP</span>
+              <a href="02-edital-detalhe.html" style="color: #3A3E45; font-size: 15px; font-weight: 500; text-decoration: none; line-height: 1.3;">Registro de preços para aquisição de colchões e cadeiras de rodas para a Secretaria de Saúde</a>
+            </div>
+            <div class="meta" style="color: #74797F;"><span>MUNICIPIO DE DELMIRO GOUVEIA</span><span>·</span><span>Delmiro Gouveia/AL</span><span>·</span><span>Pregão - Eletrônico nº 41/2026</span><span>·</span><span>3 anexos</span></div>
+          </div>
+          <span class="mono" style="width: 118px; text-align: right; font-size: 14px; color: #3A3E45;">R$ 212.400</span>
+          <span style="width: 92px; text-align: right; font-size: 12.5px; color: #74797F;">abre 22/10</span>
+          <button type="button" class="estrela" aria-label="Desfavoritar" style="border-color: #1B5E4B; background: #E4EFE8; color: #14402F;"><svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" aria-hidden="true"><path d="m12 4 2.4 5 5.6.8-4 3.9 1 5.5-5-2.7-5 2.7 1-5.5-4-3.9 5.6-.8z"></path></svg></button>
+        </div>
+
+        <!-- Aviso de diário no sistema: mesma etiqueta do boletim. -->
+        <div class="linha">
+          <span class="ponto" style="background: #1B5E4B;"></span>
+          <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px;">
+            <div style="display: flex; align-items: flex-start; gap: 8px;">
+              <span class="tag">Cotação</span>
+              <a href="#" style="color: #16181D; font-size: 15px; font-weight: 600; text-decoration: none; line-height: 1.3;">CADEIRA DE RODAS PARA OBESO, para atender a Secretaria Municipal de Saúde</a>
+            </div>
+            <div class="meta"><span>Maceió · SMS</span><span>·</span><span>Diário de Maceió · ed. 7341</span><span>·</span><span>publicado 03/10</span></div>
+          </div>
+          <span class="mono" style="width: 118px; text-align: right; font-size: 14px;">—</span>
+          <span style="width: 92px; text-align: right; font-size: 12.5px; font-weight: 500; color: #A8431F;">até 08/10</span>
+          <button type="button" class="estrela" aria-label="Favoritar"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 4 2.4 5 5.6.8-4 3.9 1 5.5-5-2.7-5 2.7 1-5.5-4-3.9 5.6-.8z"></path></svg></button>
+        </div>
+
+        <!-- Fora de Alagoas, só no PNCP. -->
+        <div class="linha">
+          <span class="ponto"></span>
+          <div style="flex-grow: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px;">
+            <div style="display: flex; align-items: flex-start; gap: 8px;">
+              <span class="tag">PNCP</span>
+              <span class="fora">fora do sistema</span>
+              <a href="https://pncp.gov.br" style="color: #16181D; font-size: 15px; font-weight: 600; text-decoration: none; line-height: 1.3;">Aquisição de equipamentos de reabilitação: cadeiras de rodas, andadores e muletas ↗</a>
+            </div>
+            <div class="meta"><span>SECRETARIA DE ESTADO DA SAUDE</span><span>·</span><span>Aracaju/SE</span><span>·</span><span>Pregão - Eletrônico nº 88/2026</span><span>·</span><span>estadual</span></div>
+          </div>
+          <span class="mono" style="width: 118px; text-align: right; font-size: 14px;">R$ 1.380.000</span>
+          <span style="width: 92px; text-align: right; font-size: 12.5px; color: #5B6069;">abre 27/10</span>
+          <button type="button" class="estrela" aria-label="Trazer pro sistema e favoritar"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m12 4 2.4 5 5.6.8-4 3.9 1 5.5-5-2.7-5 2.7 1-5.5-4-3.9 5.6-.8z"></path></svg></button>
+        </div>
+
+      </div>
+
+      <div style="display: flex; align-items: center; justify-content: center; gap: 14px; padding: 6px 0;">
+        <button type="button" style="height: 36px; padding: 0 16px; font-family: 'IBM Plex Sans', sans-serif; font-size: 13px; font-weight: 500; color: #16181D; background: #FFFFFF; border: 1px solid #D9D6CE; border-radius: 7px; cursor: pointer;">Carregar mais</button>
+        <span style="font-size: 12.5px; color: #74797F;">mostrando 5 de 14</span>
+      </div>
+
+      <p style="margin: 0; padding: 0 2px; font-size: 12.5px; color: #5B6069;">Favoritar um edital "fora do sistema" traz ele por inteiro: anexos, acompanhamento, resultado, contrato e tarefas — inclusive de fora de Alagoas.</p>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

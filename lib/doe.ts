@@ -12,6 +12,8 @@
 const BASE_DOE = 'https://diario.imprensaoficial.al.gov.br/apinova/api'
 
 const TIMEOUT_MS = 20_000
+// Edição comum tem menos de 1 MB, mas a 2917 (03/11) veio com 16 MB e 484 páginas.
+const TIMEOUT_PDF_MS = 45_000
 
 async function fetchComTimeout(url: string, init?: RequestInit): Promise<Response> {
   try {
@@ -206,12 +208,23 @@ export interface DoePaginaTexto {
 // busca em si desde 2026-09-23: a mesma edição agora é lida por dois
 // extratores (aquisição judicial e avisos de licitação), e baixar/extrair o
 // PDF é a parte cara — faz uma vez só por edição.
-export async function extrairPaginasPdf(editionId: number): Promise<DoePaginaTexto[]> {
-  const res = await fetchComTimeout(`${BASE_DOE}/editions/viewPdf/${editionId}`)
-
-  if (!res.ok) {
-    throw new Error(`Diário Oficial AL respondeu ${res.status} ao baixar PDF da edição ${editionId}: ${await res.text()}`)
+export async function extrairPaginasPdf(editionId: number, limiteMs: number = TIMEOUT_PDF_MS): Promise<DoePaginaTexto[]> {
+  // O limite vale pro download inteiro, não só pra resposta começar: o corpo é
+  // lido mais abaixo, e foi ele que estourou na edição de 16 MB de 03/11.
+  const sinal = AbortSignal.timeout(limiteMs)
+  const baixar = async () => {
+    const res = await fetch(`${BASE_DOE}/editions/viewPdf/${editionId}`, { signal: sinal })
+    if (!res.ok) {
+      throw new Error(`Diário Oficial AL respondeu ${res.status} ao baixar PDF da edição ${editionId}: ${await res.text()}`)
+    }
+    return Buffer.from(await res.arrayBuffer())
   }
+  const buffer = await baixar().catch((err) => {
+    if (err instanceof Error && err.name === 'TimeoutError') {
+      throw new Error(`PDF da edição ${editionId} não baixou em ${Math.round(limiteMs / 1000)}s`)
+    }
+    throw err
+  })
 
   // Import dinâmico: só carrega a lib de PDF (e o worker do pdf.js por trás
   // dela) quando o fallback é realmente usado, não em todo request da rota.
@@ -226,7 +239,6 @@ export async function extrairPaginasPdf(editionId: number): Promise<DoePaginaTex
   await import('pdf-parse/worker')
   const { PDFParse } = await import('pdf-parse')
 
-  const buffer = Buffer.from(await res.arrayBuffer())
   const parser = new PDFParse({ data: buffer })
 
   try {

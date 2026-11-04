@@ -1,3 +1,9 @@
+-- Estado do banco em 2026-10-08, quando as migrações passaram a ser
+-- versionadas. Era o antigo lib/schema.sql, um arquivo cumulativo rodado
+-- inteiro a cada vez — por isso tudo aqui é idempotente (IF NOT EXISTS,
+-- UPDATE ... WHERE ... IS NULL). Não editar: mudança nova vai num arquivo
+-- novo, 002_..., 003_... (ver scripts/migrate.ts).
+
 CREATE TABLE IF NOT EXISTS editais (
   id                          SERIAL PRIMARY KEY,
   numero_controle_pncp        TEXT UNIQUE NOT NULL,
@@ -340,3 +346,73 @@ ALTER TABLE edital_status ADD COLUMN IF NOT EXISTS vitoria_descartada_em TIMESTA
 -- (extrairDataSessao em lib/diario-municipal.ts, 2026-09-28). NULL = o texto
 -- não traz data reconhecível.
 ALTER TABLE diario_municipal_materias ADD COLUMN IF NOT EXISTS data_sessao TIMESTAMPTZ;
+
+
+-- Dia do boletim = dia da CAPTURA, não da publicação (2026-10-06, Eduardo).
+-- 59% dos editais entram depois do dia em que foram publicados (checagem de
+-- itens, PNCP fora do ar, sync das 20h) e caíam num boletim que já tinha
+-- sido lido. Ex.: FUNDEPES Dispensa 104241/2026, publicada 02/10 e só
+-- capturada às 19h pela checagem de itens.
+-- Captura a partir das 18h (Maceió) vai pro dia seguinte, e sábado/domingo
+-- vão pra segunda — quem lê o boletim de manhã vê o que entrou depois que
+-- leu o anterior. Sem semicolon no corpo: o migrate.ts antigo quebrava o
+-- arquivo nesse caractere.
+CREATE OR REPLACE FUNCTION dia_do_boletim(t TIMESTAMPTZ) RETURNS DATE LANGUAGE sql STABLE AS '
+  SELECT d + CASE EXTRACT(ISODOW FROM d) WHEN 6 THEN 2 WHEN 7 THEN 1 ELSE 0 END
+  FROM (SELECT ((t AT TIME ZONE ''America/Maceio'') + INTERVAL ''6 hours'')::date AS d) x
+';
+
+-- Linhas que já existiam ficam no dia de publicação (como era): o histórico
+-- entrou em lotes (DOE-AL jul-set em 14/09, diários municipais em 23 e
+-- 30/09) e viraria um boletim gigante no dia da carga. A ordem (coluna sem
+-- default, preenche, depois default) deixa o arquivo seguro pra rodar de novo.
+ALTER TABLE editais ADD COLUMN IF NOT EXISTS boletim_dia DATE;
+UPDATE editais SET boletim_dia = (data_publicacao_pncp AT TIME ZONE 'America/Maceio')::date WHERE boletim_dia IS NULL;
+ALTER TABLE editais ALTER COLUMN boletim_dia SET DEFAULT dia_do_boletim(NOW());
+
+ALTER TABLE itens_pendentes ADD COLUMN IF NOT EXISTS boletim_dia DATE;
+UPDATE itens_pendentes SET boletim_dia = (contratacao_json->>'dataPublicacaoPncp')::date WHERE boletim_dia IS NULL;
+ALTER TABLE itens_pendentes ALTER COLUMN boletim_dia SET DEFAULT dia_do_boletim(NOW());
+
+ALTER TABLE doe_al_matches ADD COLUMN IF NOT EXISTS boletim_dia DATE;
+UPDATE doe_al_matches SET boletim_dia = publication_date WHERE boletim_dia IS NULL;
+ALTER TABLE doe_al_matches ALTER COLUMN boletim_dia SET DEFAULT dia_do_boletim(NOW());
+
+ALTER TABLE doe_al_licitacoes ADD COLUMN IF NOT EXISTS boletim_dia DATE;
+UPDATE doe_al_licitacoes SET boletim_dia = publication_date WHERE boletim_dia IS NULL;
+ALTER TABLE doe_al_licitacoes ALTER COLUMN boletim_dia SET DEFAULT dia_do_boletim(NOW());
+
+ALTER TABLE doe_al_cotacoes ADD COLUMN IF NOT EXISTS boletim_dia DATE;
+UPDATE doe_al_cotacoes SET boletim_dia = publication_date WHERE boletim_dia IS NULL;
+ALTER TABLE doe_al_cotacoes ALTER COLUMN boletim_dia SET DEFAULT dia_do_boletim(NOW());
+
+ALTER TABLE diario_municipal_materias ADD COLUMN IF NOT EXISTS boletim_dia DATE;
+UPDATE diario_municipal_materias SET boletim_dia = data_circulacao WHERE boletim_dia IS NULL;
+ALTER TABLE diario_municipal_materias ALTER COLUMN boletim_dia SET DEFAULT dia_do_boletim(NOW());
+
+
+-- Etapa única (2026-10-07, pedido do usuário): favoritada = avaliando, gerenciada em
+-- diante = vai participar. Estrela e status nunca ligados juntos — quem tem
+-- status perde a estrela (definirEtapa em app/actions/acompanhamento.ts
+-- mantém isso daqui pra frente).
+UPDATE edital_status SET favorito = FALSE WHERE favorito AND status_interno IS NOT NULL;
+UPDATE diario_status SET favorito = FALSE WHERE favorito AND status_interno IS NOT NULL;
+
+
+-- Tela "Andamento" (2026-10-07, pedido do usuário). Mudança de etapa feita na tela
+-- (favoritar, gerenciar, status) vira linha na linha do tempo — "quando
+-- participar". Vale pra edital e aviso, chave (fonte, item_id) como tarefas.
+-- etapa NULL = tirado do acompanhamento.
+CREATE TABLE IF NOT EXISTS etapa_eventos (
+  id        SERIAL PRIMARY KEY,
+  fonte     TEXT NOT NULL,
+  item_id   INTEGER NOT NULL,
+  etapa     TEXT,
+  em        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_etapa_eventos_item ON etapa_eventos (fonte, item_id);
+
+-- Movimentação do PNCP (edital_eventos) capturada depois disso aparece como
+-- "novo" na lista do Andamento e no badge do menu, até abrir o edital.
+ALTER TABLE edital_status ADD COLUMN IF NOT EXISTS movimentacao_vista_em TIMESTAMPTZ;
+CREATE INDEX IF NOT EXISTS idx_edital_eventos_edital ON edital_eventos (edital_id, capturado_em DESC);

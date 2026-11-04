@@ -2,12 +2,21 @@
 
 import { useCallback, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
-import { alternarFavorito, descartar, desfazerDescarte, marcarVisto } from '@/app/actions/edital'
-import { alternarFavoritoAviso, descartarAviso, desfazerDescarteAviso, marcarAvisoVisto } from '@/app/actions/diario'
+import { definirEtapa } from '@/app/actions/acompanhamento'
+import { descartar, desfazerDescarte, marcarVisto } from '@/app/actions/edital'
+import { descartarAviso, desfazerDescarteAviso, marcarAvisoVisto } from '@/app/actions/diario'
 import { Cabecalho } from '@/components/boletim/cabecalho'
 import { FaixaFiltros } from '@/components/boletim/faixa-filtros'
 import { LinhaAviso } from '@/components/boletim/linha-aviso'
 import { LinhaEdital } from '@/components/boletim/linha-edital'
+import {
+  etapaAoFavoritar,
+  etapaAoGerenciar,
+  etapaAvancada,
+  etapaDe,
+  type Etapa,
+  type StatusInterno,
+} from '@/lib/acompanhamento-tipos'
 import type { EditalDoBoletim, ResumoDoDia } from '@/lib/boletim'
 import type { AvisoDeDiario } from '@/lib/diarios'
 
@@ -57,11 +66,18 @@ function subtituloDe(item: Item): string {
 }
 
 type AcaoOtimista =
-  | { tipo: 'favorito'; chave: string }
+  | { tipo: 'etapa'; chave: string; etapa: Etapa | null }
   | { tipo: 'descartar'; chave: string }
   | { tipo: 'visto'; chave: string }
 
-function aplicar(item: Item, mudanca: Partial<{ visto: boolean; favorito: boolean }>): Item {
+function etapaDoItem(item: Item): Etapa | null {
+  return etapaDe(item.secao === 'pncp' ? item.edital : item.aviso)
+}
+
+function aplicar(
+  item: Item,
+  mudanca: Partial<{ visto: boolean; favorito: boolean; statusInterno: StatusInterno | null }>
+): Item {
   return item.secao === 'pncp'
     ? { ...item, edital: { ...item.edital, ...mudanca } }
     : { ...item, aviso: { ...item.aviso, ...mudanca } }
@@ -97,7 +113,8 @@ const SEM_DATA = Number.MAX_SAFE_INTEGER
 
 function urgencia(item: Item, dia: string): number {
   if (item.secao === 'pncp') {
-    return item.edital.aberturaProposta ? Date.parse(item.edital.aberturaProposta) : SEM_DATA
+    const prazo = item.edital.aberturaProposta ?? item.edital.prazoEstimado
+    return prazo ? Date.parse(prazo) : SEM_DATA
   }
   if (item.aviso.dataSessao) return Date.parse(item.aviso.dataSessao)
   if (item.aviso.fonte === 'judicial' || item.aviso.tipo === 'Cotação') {
@@ -130,12 +147,16 @@ export function Boletim({ dia, editais, descartados, avisos, avisosDescartados, 
   // ao servidor a cada tecla deixaria a lista sempre um passo atrás do dedo.
   const [lista, aplicarOtimista] = useOptimistic(itensDoServidor, (estado: Item[], acao: AcaoOtimista) => {
     switch (acao.tipo) {
-      case 'favorito':
-        return estado.map((item) => {
-          if (item.chave !== acao.chave) return item
-          const favorito = item.secao === 'pncp' ? item.edital.favorito : item.aviso.favorito
-          return aplicar(item, { favorito: !favorito, visto: true })
-        })
+      case 'etapa':
+        return estado.map((item) =>
+          item.chave === acao.chave
+            ? aplicar(item, {
+                favorito: acao.etapa === 'favoritada',
+                statusInterno: acao.etapa === 'favoritada' ? null : acao.etapa,
+                visto: true,
+              })
+            : item
+        )
       case 'visto':
         return estado.map((item) => (item.chave === acao.chave ? aplicar(item, { visto: true }) : item))
       case 'descartar':
@@ -192,16 +213,24 @@ export function Boletim({ dia, editais, descartados, avisos, avisosDescartados, 
     [descartados, avisosDescartados, restaurados]
   )
 
-  const favoritar = useCallback(
-    (item: Item) => {
+  // F e G (2026-10-07): favoritada (avaliando) e gerenciada (vai participar)
+  // são degraus da mesma etapa — um apaga o outro. Etapa avançada (em
+  // andamento, finalizada, ganha) não muda pelo boletim, só pelo seletor.
+  const mudarEtapa = useCallback(
+    (item: Item, calcular: (atual: Etapa | null) => Etapa | null) => {
+      const atual = etapaDoItem(item)
+      if (etapaAvancada(atual)) return
+      const etapa = calcular(atual)
       iniciarTransicao(async () => {
-        aplicarOtimista({ tipo: 'favorito', chave: item.chave })
-        if (item.secao === 'pncp') await alternarFavorito(item.edital.id)
-        else await alternarFavoritoAviso(item.aviso.fonte, item.aviso.id)
+        aplicarOtimista({ tipo: 'etapa', chave: item.chave, etapa })
+        if (item.secao === 'pncp') await definirEtapa('pncp', item.edital.id, etapa)
+        else await definirEtapa(item.aviso.fonte, item.aviso.id, etapa)
       })
     },
     [aplicarOtimista]
   )
+  const favoritar = useCallback((item: Item) => mudarEtapa(item, etapaAoFavoritar), [mudarEtapa])
+  const gerenciar = useCallback((item: Item) => mudarEtapa(item, etapaAoGerenciar), [mudarEtapa])
 
   const marcarAberto = useCallback(
     (item: Item) => {
@@ -284,6 +313,10 @@ export function Boletim({ dia, editais, descartados, avisos, avisosDescartados, 
           evento.preventDefault()
           if (atual) favoritar(atual)
           break
+        case 'g':
+          evento.preventDefault()
+          if (atual) gerenciar(atual)
+          break
         case 'd':
           evento.preventDefault()
           if (atual) descartarItem(atual)
@@ -297,7 +330,7 @@ export function Boletim({ dia, editais, descartados, avisos, avisosDescartados, 
 
     window.addEventListener('keydown', aoTeclar)
     return () => window.removeEventListener('keydown', aoTeclar)
-  }, [navegaveis, selecionado, favoritar, descartarItem, abrir])
+  }, [navegaveis, selecionado, favoritar, gerenciar, descartarItem, abrir])
 
   // Acompanha a seleção com a rolagem — sem isso o J leva o foco pra fora da
   // tela e a navegação por teclado fica cega.
@@ -317,6 +350,7 @@ export function Boletim({ dia, editais, descartados, avisos, avisosDescartados, 
             selecionado: indice === selecionado,
             onSelecionar: () => setSelecionado(indice),
             onFavoritar: () => favoritar(item),
+            onGerenciar: () => gerenciar(item),
             onDescartar: () => descartarItem(item),
             onAbrir: () => marcarAberto(item),
           }

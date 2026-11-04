@@ -1,10 +1,15 @@
 import { sql } from '@/lib/db'
+import { comFusoDeBrasilia, formatarDataHora, nomeDeArquivoLegivel, paraData } from '@/lib/formato'
 import {
   buscarAtasDaCompra,
+  buscarCompra,
   buscarContratosDaCompra,
+  buscarHistoricoDaCompra,
   buscarItensComSituacao,
   buscarResultadosDoItem,
   type LimitesPncp,
+  type PncpContratacao,
+  type PncpHistorico,
 } from '@/lib/pncp'
 
 // Acompanhamento automático (item 9 do MVP, 2026-09-28). A situação geral da
@@ -15,6 +20,11 @@ import {
 //   - ata de registro de preços (pregão SRP) e contrato assinado
 // Isso vira um retrato (editais.acompanhamento_json) e uma linha do tempo só
 // de acréscimo (edital_eventos).
+//
+// Tela "Andamento" (2026-10-07): entra também o histórico da compra
+// (documento novo depois da publicação, retificação) e a comparação das datas
+// e da situação da compra com o que está gravado — adiamento vira "Abertura
+// alterada" e a linha do edital passa a ter a data nova.
 
 // CNPJ da empresa (env CNPJ_EMPRESA), só dígitos. Resultado ou contrato com ele
 // vira sugestão de "ganha" — nunca escrita automática (regra 6 do DESIGN.md).
@@ -75,6 +85,9 @@ export interface RetratoPncp {
   resultadosPendentes: number
 }
 
+// Situação da compra enquanto nada aconteceu — 169 de 170 editais em 22/09.
+const SITUACAO_DIVULGADA = 'Divulgada no PNCP'
+
 const SITUACAO_EM_ANDAMENTO = 1
 const SITUACAO_HOMOLOGADO = 2
 
@@ -129,15 +142,20 @@ export async function verificarEdital(
 
   try {
     const [anteriorBruto] = (await sql`
-      SELECT acompanhamento_json FROM editais WHERE id = ${edital.id}
-    `) as { acompanhamento_json: RetratoPncp | null }[]
+      SELECT acompanhamento_json, data_abertura_proposta, data_encerramento_proposta, situacao_nome
+      FROM editais WHERE id = ${edital.id}
+    `) as (GravadoDaCompra & { acompanhamento_json: RetratoPncp | null })[]
     const anterior = anteriorBruto?.acompanhamento_json ?? null
     const itensAnteriores = new Map((anterior?.itens ?? []).map((i) => [i.numero, i]))
 
     const itensPncp = await buscarItensComSituacao(cnpj, ano, seq, limites)
-    const [atasPncp, contratosPncp] = await Promise.all([
+    // Histórico e compra são extras da tela Andamento: se um deles falhar, o
+    // resto da verificação (resultado, ata, contrato) continua valendo.
+    const [atasPncp, contratosPncp, historico, compra] = await Promise.all([
       buscarAtasDaCompra(cnpj, ano, seq, limites),
       buscarContratosDaCompra(cnpj, ano, seq, limites),
+      buscarHistoricoDaCompra(cnpj, ano, seq, limites).catch(() => null),
+      buscarCompra(cnpj, ano, seq, limites).catch(() => null),
     ])
 
     const itens: ItemSalvo[] = []
@@ -212,7 +230,13 @@ export async function verificarEdital(
       WHERE id = ${edital.id}
     `
 
-    const eventosNovos = await gravarEventos(edital.id, retrato)
+    const eventos = [...eventosDoRetrato(retrato)]
+    if (historico) eventos.push(...eventosDoHistorico(historico))
+    if (compra && anteriorBruto) {
+      eventos.push(...mudancasDaCompra(anteriorBruto, compra, ultimaRetificacao(historico)))
+      await atualizarDadosDaCompra(edital.id, compra)
+    }
+    const eventosNovos = await gravarEventos(edital.id, eventos)
     return { completo, eventosNovos, erro: null }
   } catch (err) {
     const erro = err instanceof Error ? err.message : String(err)
@@ -322,12 +346,151 @@ export function eventosDoRetrato(retrato: RetratoPncp): EventoNovo[] {
   return eventos
 }
 
-async function gravarEventos(editalId: number, retrato: RetratoPncp): Promise<number> {
+// --- Histórico da compra -------------------------------------------------
+
+// Documento incluído até 1h depois da publicação é o pacote original do
+// edital (medido em 07/10: o órgão sobe edital, TR e anexos em poucos
+// minutos), não movimentação.
+const JANELA_PUBLICACAO_MS = 60 * 60 * 1000
+
+function instante(valor: string): number {
+  return Date.parse(comFusoDeBrasilia(valor) as string)
+}
+
+function inicioDaCompra(historico: PncpHistorico[]): number {
+  const inclusao = historico
+    .filter((h) => h.categoriaLogManutencaoNome === 'Contratação' && h.tipoLogManutencaoNome === 'Inclusão')
+    .map((h) => instante(h.logManutencaoDataInclusao))
+  return Math.min(...(inclusao.length ? inclusao : historico.map((h) => instante(h.logManutencaoDataInclusao))))
+}
+
+function tituloDoDocumento(h: PncpHistorico): string {
+  const titulo = nomeDeArquivoLegivel(h.documentoTitulo ?? '')
+    .replace(/\.(pdf|zip|docx?|xlsx?|odt|rar)$/i, '')
+    .replace(/_+/g, ' ')
+    .trim()
+  const tipo = h.documentoTipo && h.documentoTipo !== 'Outros Documentos' ? h.documentoTipo : null
+  if (tipo && titulo) return `${tipo} (${titulo})`
+  return tipo ?? (titulo || 'documento')
+}
+
+const ACAO_DOCUMENTO: Record<string, string> = {
+  Inclusão: 'Novo documento',
+  Retificação: 'Documento substituído',
+  Exclusão: 'Documento retirado',
+}
+
+// Movimentação do órgão depois da publicação. Item e resultado ficam de fora:
+// a situação dos itens e o resultado já vêm do retrato, e o histórico deles é
+// ruído (769 "Item de Contratação / Retificação" em 30 editais, 07/10).
+export function eventosDoHistorico(historico: PncpHistorico[]): EventoNovo[] {
+  if (historico.length === 0) return []
+  const corte = inicioDaCompra(historico) + JANELA_PUBLICACAO_MS
+  const eventos: EventoNovo[] = []
+  for (const h of historico) {
+    if (instante(h.logManutencaoDataInclusao) <= corte) continue
+    const justificativa = h.justificativa?.trim() ? `: ${h.justificativa.trim()}` : ''
+
+    if (h.categoriaLogManutencaoNome === 'Documento de Contratação') {
+      eventos.push({
+        chave: `doc:${h.tipoLogManutencaoNome}:${h.documentoSequencial ?? h.documentoTitulo}:${h.logManutencaoDataInclusao}`,
+        tipo: 'documento',
+        descricao: `${ACAO_DOCUMENTO[h.tipoLogManutencaoNome] ?? h.tipoLogManutencaoNome}: ${tituloDoDocumento(h)}`,
+        dataFato: h.logManutencaoDataInclusao,
+      })
+    } else if (h.categoriaLogManutencaoNome === 'Contratação') {
+      eventos.push({
+        chave: `compra:${h.tipoLogManutencaoNome}:${h.logManutencaoDataInclusao}`,
+        tipo: 'retificacao',
+        descricao:
+          h.tipoLogManutencaoNome === 'Exclusão'
+            ? `Licitação excluída do PNCP pelo órgão${justificativa}`
+            : `Órgão retificou a licitação no PNCP${justificativa}`,
+        dataFato: h.logManutencaoDataInclusao,
+      })
+    }
+  }
+  return eventos
+}
+
+function ultimaRetificacao(historico: PncpHistorico[] | null): string | null {
+  return maiorData(
+    (historico ?? [])
+      .filter((h) => h.categoriaLogManutencaoNome === 'Contratação' && h.tipoLogManutencaoNome === 'Retificação')
+      .map((h) => h.logManutencaoDataInclusao)
+  )
+}
+
+interface GravadoDaCompra {
+  data_abertura_proposta: Date | string | null
+  data_encerramento_proposta: Date | string | null
+  situacao_nome: string | null
+}
+
+function mesmoInstante(gravado: Date | string | null, doPncp: string | null | undefined): boolean {
+  const a = gravado ? paraData(gravado).getTime() : null
+  const b = doPncp ? instante(doPncp) : null
+  return a === b
+}
+
+// O sync grava o edital uma vez e nunca mais atualiza (ON CONFLICT DO
+// NOTHING). Pros acompanhados, a verificação compara datas e situação com o
+// PNCP: adiamento e suspensão viram evento e a linha passa a mostrar o novo.
+export function mudancasDaCompra(
+  gravado: GravadoDaCompra,
+  compra: PncpContratacao,
+  dataRetificacao: string | null
+): EventoNovo[] {
+  const eventos: EventoNovo[] = []
+  const campos = [
+    { nome: 'Abertura', chave: 'abertura', antes: gravado.data_abertura_proposta, depois: compra.dataAberturaProposta },
+    {
+      nome: 'Encerramento das propostas',
+      chave: 'encerramento',
+      antes: gravado.data_encerramento_proposta,
+      depois: compra.dataEncerramentoProposta,
+    },
+  ]
+  for (const c of campos) {
+    if (mesmoInstante(c.antes, c.depois)) continue
+    const de = c.antes ? formatarDataHora(paraData(c.antes).toISOString()) : 'sem data'
+    const para = c.depois ? formatarDataHora(comFusoDeBrasilia(c.depois)) : 'sem data'
+    eventos.push({
+      chave: `${c.chave}:${c.depois ?? 'nenhuma'}`,
+      tipo: 'retificacao',
+      descricao: `${c.nome} alterada: ${de} → ${para}`,
+      dataFato: dataRetificacao,
+    })
+  }
+  if (compra.situacaoCompraNome && gravado.situacao_nome && compra.situacaoCompraNome !== gravado.situacao_nome) {
+    eventos.push({
+      chave: `situacao_compra:${compra.situacaoCompraNome}`,
+      tipo: 'retificacao',
+      descricao: `Situação da licitação: ${compra.situacaoCompraNome}`,
+      dataFato: dataRetificacao,
+    })
+  }
+  return eventos
+}
+
+async function atualizarDadosDaCompra(editalId: number, compra: PncpContratacao): Promise<void> {
+  // Data do PNCP sempre com fuso de Brasília antes de ir pro banco.
+  await sql`
+    UPDATE editais
+    SET data_abertura_proposta = ${comFusoDeBrasilia(compra.dataAberturaProposta)},
+        data_encerramento_proposta = ${comFusoDeBrasilia(compra.dataEncerramentoProposta)},
+        situacao_id = ${String(compra.situacaoCompraId)},
+        situacao_nome = ${compra.situacaoCompraNome}
+    WHERE id = ${editalId}
+  `
+}
+
+async function gravarEventos(editalId: number, eventos: EventoNovo[]): Promise<number> {
   let novos = 0
-  for (const e of eventosDoRetrato(retrato)) {
-    // Data sem hora do PNCP ("2026-09-15") viraria meia-noite UTC, que em
-    // Maceió é o dia anterior — grava ao meio-dia.
-    const dataFato = e.dataFato && e.dataFato.length === 10 ? `${e.dataFato}T12:00:00Z` : e.dataFato
+  for (const e of eventos) {
+    // Data do PNCP vem sem fuso: sem hora vira meio-dia, com hora ganha
+    // -03:00 (lib/formato.ts, comFusoDeBrasilia).
+    const dataFato = comFusoDeBrasilia(e.dataFato)
     const inseridos = await sql`
       INSERT INTO edital_eventos (edital_id, chave, tipo, descricao, data_fato, dados)
       VALUES (${editalId}, ${e.chave}, ${e.tipo}, ${e.descricao}, ${dataFato}, ${e.dados ? JSON.stringify(e.dados) : null}::jsonb)
@@ -380,27 +543,34 @@ export interface AcompanhamentoDoEdital {
   tentadoEm: string | null
   erro: string | null
   vitoriaDescartada: boolean
+  // Fato do PNCP ainda não visto (o "novo" do Andamento) — a tela marca como
+  // visto ao abrir.
+  movimentacaoNova: boolean
   // Sugestão de "ganha": itens ou contrato no CNPJ da empresa.
   vitoria: { itens: number; contrato: ContratoSalvo | null; valorHomologado: number } | null
 }
 
 export async function carregarAcompanhamento(editalId: number): Promise<AcompanhamentoDoEdital> {
-  const [[linha], eventos] = await Promise.all([
+  const [[linha], eventosPncp] = await Promise.all([
     sql`
       SELECT e.acompanhamento_json, e.acompanhamento_em, e.acompanhamento_tentado_em, e.acompanhamento_erro,
-             s.vitoria_descartada_em
+             e.situacao_nome,
+             s.vitoria_descartada_em,
+             EXISTS (
+               SELECT 1 FROM edital_eventos ev
+               WHERE ev.edital_id = e.id AND ev.capturado_em > COALESCE(s.movimentacao_vista_em, '-infinity')
+             ) AS movimentacao_nova
       FROM editais e LEFT JOIN edital_status s ON s.edital_id = e.id
       WHERE e.id = ${editalId}
     ` as Promise<Record<string, unknown>[]>,
     sql`
       SELECT tipo, descricao, data_fato, capturado_em FROM edital_eventos
       WHERE edital_id = ${editalId}
-      ORDER BY COALESCE(data_fato, capturado_em) DESC, id DESC
     ` as Promise<Record<string, unknown>[]>,
   ])
 
   const retrato = (linha?.acompanhamento_json as RetratoPncp | null) ?? null
-  const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : null)
+  const iso = (v: unknown) => (v ? paraData(v as string).toISOString() : null)
 
   let vitoria: AcompanhamentoDoEdital['vitoria'] = null
   if (retrato) {
@@ -416,8 +586,14 @@ export async function carregarAcompanhamento(editalId: number): Promise<Acompanh
 
   return {
     retrato,
-    situacao: situacaoResumida(retrato),
-    eventos: eventos.map((e) => ({
+    // Suspensa/revogada/anulada (atualizada pela verificação, mudancasDaCompra)
+    // vale mais que o resumo dos itens.
+    situacao:
+      linha?.situacao_nome && linha.situacao_nome !== SITUACAO_DIVULGADA
+        ? (linha.situacao_nome as string)
+        : situacaoResumida(retrato),
+    // Etapa, notas e tarefas entram na linha do tempo em lib/linha-do-tempo.ts.
+    eventos: eventosPncp.map((e) => ({
       tipo: e.tipo as string,
       descricao: e.descricao as string,
       dataFato: iso(e.data_fato),
@@ -427,6 +603,7 @@ export async function carregarAcompanhamento(editalId: number): Promise<Acompanh
     tentadoEm: iso(linha?.acompanhamento_tentado_em),
     erro: (linha?.acompanhamento_erro as string | null) ?? null,
     vitoriaDescartada: Boolean(linha?.vitoria_descartada_em),
+    movimentacaoNova: Boolean(linha?.movimentacao_nova),
     vitoria,
   }
 }

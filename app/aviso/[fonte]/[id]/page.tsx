@@ -1,10 +1,16 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { PainelAcompanhamento } from '@/components/acompanhamento/painel'
-import { BotaoFavoritarAviso } from '@/components/aviso/botao-favoritar'
+import { ProcurarEdital } from '@/components/aviso/procurar-edital'
+import { LinhaDoTempo } from '@/components/linha-do-tempo/linha-do-tempo'
 import { dadosDaLateral } from '@/lib/acompanhamento'
 import { buscarAvisosPorIds, FONTES_DIARIO, idsPorFonteVazio, textoCompletoDoAviso, type FonteDiario } from '@/lib/diarios'
 import { formatarDataCompleta, formatarDataHora } from '@/lib/formato'
+import { FONTES_LIGAVEIS, HORAS_ENTRE_BUSCAS, ligacaoDoAviso, type FonteLigavel } from '@/lib/ligar-avisos'
+import { carregarLinhaDoTempo } from '@/lib/linha-do-tempo'
+
+// "Procurar no PNCP agora" consulta o PNCP dentro da própria requisição.
+export const maxDuration = 60
 
 // Tela de um aviso de diário (2026-09-28). É o que abre ao clicar num aviso no
 // boletim (a seta da linha abre a publicação original) e no acompanhamento:
@@ -47,6 +53,51 @@ function ondeEstaOEdital(fonte: FonteDiario, tipo: string): string[] {
   ]
 }
 
+// Plataforma da disputa citada no aviso, e onde o edital pode ser baixado
+// enquanto não chega no PNCP (2026-10-23). Só o caminho, sem robô com login.
+// Em 90 dias, metade dos avisos municipais da área era da BNC.
+const PLATAFORMAS: { nome: string; curto: string; teste: RegExp; url: string; dica: string }[] = [
+  {
+    nome: 'BNC (Bolsa Nacional de Compras)',
+    curto: 'BNC',
+    teste: /\bbnc\b|bolsa nacional de compras/i,
+    url: 'https://bnccompras.com/Process/ProcessSearchPublic?param1=0',
+    dica: 'Na pesquisa pública da BNC, procure pela cidade e o número do pregão — o edital e os anexos ficam no processo.',
+  },
+  {
+    nome: 'Licitanet',
+    curto: 'Licitanet',
+    teste: /licitanet/i,
+    url: 'https://licitanet.com.br/',
+    dica: 'No Licitanet, procure pelo órgão e o número do pregão.',
+  },
+  {
+    nome: 'Compras.gov.br',
+    curto: 'Compras.gov.br',
+    teste: /compras\.gov|gov\.br\/compras|comprasnet/i,
+    url: 'https://www.gov.br/compras/pt-br',
+    dica: 'Compra do Compras.gov.br costuma chegar ao PNCP sozinha, em poucos dias.',
+  },
+  {
+    nome: 'BLL Compras',
+    curto: 'BLL',
+    teste: /\bbll\b/i,
+    url: 'https://bll.org.br/',
+    dica: 'Na BLL, procure pelo órgão e o número do processo.',
+  },
+  {
+    nome: 'Portal de Compras Públicas',
+    curto: 'Portal de Compras Públicas',
+    teste: /portal ?de ?compras ?p[uú]blicas|portaldecompraspublicas/i,
+    url: 'https://www.portaldecompraspublicas.com.br/',
+    dica: 'No Portal de Compras Públicas, procure pelo órgão e o número do processo.',
+  },
+]
+
+function plataformaDoAviso(texto: string) {
+  return PLATAFORMAS.find((p) => p.teste.test(texto)) ?? null
+}
+
 // E-mails e links citados no texto — é por onde se pede o edital.
 function contatosDoTexto(texto: string): { emails: string[]; links: string[] } {
   const emails = [...new Set((texto.match(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g) ?? []).map((e) => e.replace(/\.$/, '').toLowerCase()))]
@@ -62,12 +113,18 @@ export default async function PaginaAviso({ params }: PageProps<'/aviso/[fonte]/
 
   const ids = idsPorFonteVazio()
   ids[fonte] = [id]
-  const [[aviso], textoCompleto, lateral] = await Promise.all([
+  const [[aviso], textoCompleto, lateral, ligacao, linhaDoTempo] = await Promise.all([
     buscarAvisosPorIds(ids),
     textoCompletoDoAviso(fonte, id),
     dadosDaLateral(fonte, id),
+    ligacaoDoAviso(fonte, id),
+    carregarLinhaDoTempo(fonte, id),
   ])
   if (!aviso) notFound()
+
+  const ligavel = (FONTES_LIGAVEIS as string[]).includes(fonte)
+  const plataforma = plataformaDoAviso(textoCompleto ?? aviso.texto)
+  const hrefEdital = ligacao.edital ? `/edital/${encodeURIComponent(ligacao.edital.numeroControlePncp)}` : null
 
   const judicial = fonte === 'judicial'
   const trechos = (textoCompleto ?? aviso.texto).split(/\s\n\s/).map((t) => t.trim()).filter(Boolean)
@@ -77,8 +134,8 @@ export default async function PaginaAviso({ params }: PageProps<'/aviso/[fonte]/
   return (
     <>
       <header className="flex flex-col gap-2 border-b border-border bg-surface-muted px-6 pb-4 pt-[18px]">
-        <Link href={`/boletim/${aviso.dia}`} className="text-[12.5px] text-accent hover:text-accent-strong">
-          ← Boletim de {formatarDataCompleta(`${aviso.dia}T12:00:00Z`).slice(0, 5)}
+        <Link href={`/boletim/${aviso.diaDoBoletim}`} className="text-[12.5px] text-accent hover:text-accent-strong">
+          ← Boletim de {formatarDataCompleta(`${aviso.diaDoBoletim}T12:00:00Z`).slice(0, 5)}
         </Link>
         <div className="flex items-start gap-2.5">
           <span
@@ -113,7 +170,29 @@ export default async function PaginaAviso({ params }: PageProps<'/aviso/[fonte]/
             ))}
           </dl>
 
+          {ligacao.edital && hrefEdital && (
+            <section className="flex flex-col gap-2 rounded-card border border-accent bg-accent-soft p-5">
+              <h2 className="m-0 text-[11px] font-medium uppercase tracking-[0.05em] text-accent-strong">
+                Este aviso já está no PNCP
+              </h2>
+              <p className="m-0 text-[13px] leading-relaxed text-ink">
+                O edital foi publicado no PNCP e ligado a este aviso em {formatarDataHora(ligacao.edital.ligadoEm)}
+                {ligacao.edital.anexos > 0
+                  ? `, com ${ligacao.edital.anexos} ${ligacao.edital.anexos === 1 ? 'anexo' : 'anexos'}`
+                  : ' (os anexos chegam em até meia hora)'}
+                . Etapa, anotações e tarefas foram para o edital.
+              </p>
+              <Link
+                href={hrefEdital}
+                className="flex h-10 w-fit items-center rounded-control border border-accent bg-accent px-4 text-[13px] font-medium text-white hover:bg-accent-strong"
+              >
+                Abrir o edital
+              </Link>
+            </section>
+          )}
+
           {/* Por que não tem itens nem anexos aqui (pedido do Eduardo, 2026-09-28). */}
+          {!ligacao.edital && (
           <section className="flex flex-col gap-2 rounded-card border border-[#efd9cf] bg-warn-soft p-5">
             <h2 className="m-0 text-[11px] font-medium uppercase tracking-[0.05em] text-warn-strong">
               Onde está o edital?
@@ -127,6 +206,22 @@ export default async function PaginaAviso({ params }: PageProps<'/aviso/[fonte]/
                 {paragrafo}
               </p>
             ))}
+            {plataforma && (
+              <div className="flex flex-col gap-1 pt-1 text-[13px]">
+                <span className="text-[11px] uppercase tracking-[0.05em] text-faint">Onde baixar enquanto isso</span>
+                <span className="text-ink">
+                  Disputa na <strong className="font-medium">{plataforma.nome}</strong>. {plataforma.dica}
+                </span>
+                <a
+                  href={plataforma.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-fit font-medium text-accent hover:text-accent-strong"
+                >
+                  Abrir {plataforma.curto} ↗
+                </a>
+              </div>
+            )}
             {(emails.length > 0 || links.length > 0) && (
               <div className="flex flex-col gap-1 pt-1 text-[13px]">
                 <span className="text-[11px] uppercase tracking-[0.05em] text-faint">Contatos citados no aviso</span>
@@ -148,7 +243,24 @@ export default async function PaginaAviso({ params }: PageProps<'/aviso/[fonte]/
                 ))}
               </div>
             )}
+            {ligavel && (
+              <div className="flex flex-col gap-0.5 border-t border-[#efd9cf] pt-2.5">
+                <span className="text-[12.5px] text-ink-2">
+                  {lateral.favorito || lateral.statusInterno
+                    ? `O sistema procura este edital no PNCP a cada ${HORAS_ENTRE_BUSCAS}h e, quando achar, traz os anexos e passa etapa, anotações e tarefas para ele.`
+                    : `Favorite ou gerencie este aviso e o sistema passa a procurar o edital no PNCP sozinho, a cada ${HORAS_ENTRE_BUSCAS}h.`}
+                </span>
+                <span className="text-[11.5px] text-faint">
+                  {ligacao.buscadoEm ? `Última busca: ${formatarDataHora(ligacao.buscadoEm)}` : 'Ainda não procurado'}
+                  {ligacao.erro && ' · o PNCP não respondeu na última tentativa'}
+                </span>
+                <ProcurarEdital fonte={fonte as FonteLigavel} avisoId={id} />
+              </div>
+            )}
           </section>
+          )}
+
+          <LinhaDoTempo fonte={fonte} itemId={id} eventos={linhaDoTempo} responsaveis={lateral.responsaveis} />
 
           <section className="flex flex-col gap-3 rounded-card border border-border bg-surface p-5">
             <h2 className="m-0 text-[11px] font-medium uppercase tracking-[0.05em] text-faint">Texto publicado</h2>
@@ -167,19 +279,25 @@ export default async function PaginaAviso({ params }: PageProps<'/aviso/[fonte]/
         </div>
 
         <aside className="flex w-[306px] shrink-0 flex-col gap-3.5">
-          <BotaoFavoritarAviso fonte={fonte} avisoId={id} favorito={aviso.favorito} />
-          <a
-            href={aviso.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="flex h-10 items-center justify-center gap-2 rounded-control border border-accent bg-accent text-[13px] font-medium text-white hover:bg-accent-strong"
-          >
-            Abrir publicação no diário
-            <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M7 17 17 7M9 7h8v8" />
-            </svg>
-          </a>
-          <PainelAcompanhamento fonte={fonte} itemId={id} dados={lateral} />
+          <PainelAcompanhamento
+            fonte={fonte}
+            itemId={id}
+            rotulo={aviso.texto}
+            dados={lateral}
+            acaoPrincipal={
+              <a
+                href={aviso.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex h-10 items-center justify-center gap-2 rounded-control border border-accent bg-accent text-[13px] font-medium text-white hover:bg-accent-strong"
+              >
+                Abrir publicação no diário
+                <svg width={14} height={14} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M7 17 17 7M9 7h8v8" />
+                </svg>
+              </a>
+            }
+          />
         </aside>
       </div>
     </>

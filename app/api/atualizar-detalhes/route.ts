@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { sql } from '@/lib/db'
 import { ERRO_REMOVIDA, atualizarDetalhe } from '@/lib/detalhe-pncp'
+import { rodarFila } from '@/lib/fila'
 
 // Compra excluída do PNCP pelo órgão (404) sai da fila — não adianta insistir.
 const PADRAO_REMOVIDA = `${ERRO_REMOVIDA}%`
@@ -11,17 +12,17 @@ export const maxDuration = 60
 // Roda no mesmo cron de 30 em 30min do /api/verificar-itens. Ordem de
 // prioridade: primeiro o que nunca conseguimos buscar, e dentro disso o que
 // abre mais cedo — é o edital que alguém vai precisar abrir primeiro.
+// Edital cuja última tentativa falhou vai pro fim da fila, em rodízio pelo
+// mais antigo tentado: em 03-04/10 um único edital que travava no PNCP (20s de
+// timeout) ficou em primeiro e gastou o orçamento de 16 rodadas seguidas.
 //
 // Edital ainda aberto é reconsultado a cada 12h (órgão costuma publicar
 // errata/anexo novo até a abertura). Depois da abertura a cópia fica como está.
 const TAMANHO_LOTE = 15
 const PAUSA_ENTRE_EDITAIS_MS = 400
-const ORCAMENTO_MS = 35_000
+// 30s + até 25s de uma chamada lenta ao PNCP (lib/pncp.ts) cabem nos 60s.
+const ORCAMENTO_MS = 30_000
 const HORAS_PARA_RECONSULTAR = 12
-
-function esperar(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
 
 export async function GET(request: Request) {
   const cronSecret = process.env.CRON_SECRET
@@ -41,30 +42,34 @@ export async function GET(request: Request) {
          data_abertura_proposta >= NOW()
          AND detalhe_atualizado_em < NOW() - make_interval(hours => ${HORAS_PARA_RECONSULTAR})
        )
-    ORDER BY (arquivos_json IS NOT NULL), data_abertura_proposta ASC NULLS LAST, id DESC
+    ORDER BY (arquivos_json IS NOT NULL),
+             (detalhe_erro IS NOT NULL),
+             CASE WHEN detalhe_erro IS NOT NULL THEN detalhe_tentado_em END ASC,
+             data_abertura_proposta ASC NULLS LAST, id DESC
     LIMIT ${TAMANHO_LOTE}
   `) as { id: number; orgao_cnpj: string; ano_compra: number; sequencial_compra: number }[]
 
   let atualizados = 0
-  let comFalha = 0
-  let ultimoErro: string | null = null
 
-  for (const edital of fila) {
-    if (Date.now() - startedAt.getTime() > ORCAMENTO_MS) break
-
-    const resultado = await atualizarDetalhe({
-      id: edital.id,
-      orgaoCnpj: edital.orgao_cnpj,
-      anoCompra: edital.ano_compra,
-      sequencialCompra: edital.sequencial_compra,
-    })
-    if (resultado.arquivos !== null) atualizados++
-    if (resultado.erro) {
-      comFalha++
-      ultimoErro = resultado.erro
-    }
-    await esperar(PAUSA_ENTRE_EDITAIS_MS)
-  }
+  // Sem memória em fila_falhas: o rodízio daqui já usa detalhe_erro e
+  // detalhe_tentado_em (ORDER BY acima).
+  const { falhas, ultimoErro } = await rodarFila({
+    itens: fila,
+    chave: (edital) => String(edital.id),
+    orcamentoMs: ORCAMENTO_MS,
+    pausaMs: PAUSA_ENTRE_EDITAIS_MS,
+    processar: async (edital) => {
+      const resultado = await atualizarDetalhe({
+        id: edital.id,
+        orgaoCnpj: edital.orgao_cnpj,
+        anoCompra: edital.ano_compra,
+        sequencialCompra: edital.sequencial_compra,
+      })
+      if (resultado.arquivos !== null) atualizados++
+      if (resultado.erro) throw new Error(resultado.erro)
+    },
+  })
+  const comFalha = falhas.length
 
   const [{ faltando }] = (await sql`
     SELECT COUNT(*)::int AS faltando FROM editais

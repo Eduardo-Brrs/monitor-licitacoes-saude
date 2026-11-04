@@ -1,6 +1,8 @@
 import {
   ehStatusInterno,
+  mapearFinalizacao,
   type DadosDaLateral,
+  type Finalizacao,
   type FiltroAcompanhamento,
   type FonteItem,
   type Ordenacao,
@@ -9,8 +11,11 @@ import {
   type Tarefa,
 } from '@/lib/acompanhamento-tipos'
 import { sql } from '@/lib/db'
+import { rotuloDoOrgao } from '@/lib/orgaos'
+import { prazoEstimadoDispensa } from '@/lib/prazo'
 import { buscarAvisosPorIds, idsPorFonteVazio, type FonteDiario } from '@/lib/diarios'
 import { diaEmMaceio } from '@/lib/formato'
+import { atasDaOrigem } from '@/lib/atas'
 
 // Acompanhamento (docs/design/DESIGN.md, tela 03 e lateral da tela 02).
 // Vale pra edital do PNCP e pra aviso de diário: a chave é (fonte, item_id),
@@ -39,12 +44,11 @@ const ORDEM_TAREFAS = sql`t.concluida_em IS NOT NULL, t.prazo ASC NULLS LAST, t.
 export async function dadosDaLateral(fonte: FonteItem, itemId: number): Promise<DadosDaLateral> {
   const statusQuery =
     fonte === 'pncp'
-      ? sql`SELECT status_interno FROM edital_status WHERE edital_id = ${itemId}`
-      : sql`SELECT status_interno FROM diario_status WHERE fonte = ${fonte} AND aviso_id = ${itemId}`
+      ? sql`SELECT favorito, status_interno, resultado, valor_ganho, observacao_final, finalizada_em FROM edital_status WHERE edital_id = ${itemId}`
+      : sql`SELECT favorito, status_interno, resultado, valor_ganho, observacao_final, finalizada_em FROM diario_status WHERE fonte = ${fonte} AND aviso_id = ${itemId}`
 
-  const [status, anotacao, tarefas, responsaveis] = await Promise.all([
+  const [status, tarefas, responsaveis, atas] = await Promise.all([
     statusQuery,
-    sql`SELECT texto, atualizado_em FROM anotacoes WHERE fonte = ${fonte} AND item_id = ${itemId}`,
     sql`
       SELECT t.*, r.nome AS responsavel_nome
       FROM tarefas t LEFT JOIN responsaveis r ON r.id = t.responsavel_id
@@ -52,14 +56,17 @@ export async function dadosDaLateral(fonte: FonteItem, itemId: number): Promise<
       ORDER BY ${ORDEM_TAREFAS}
     `,
     listarResponsaveis(),
+    atasDaOrigem(fonte, itemId),
   ])
 
-  const valorStatus = (status as { status_interno: string | null }[])[0]?.status_interno
-  const nota = (anotacao as { texto: string; atualizado_em: string }[])[0]
+  const linhaStatus = (status as Record<string, unknown>[])[0]
+  const valorStatus = linhaStatus?.status_interno
 
   return {
+    favorito: Boolean(linhaStatus?.favorito),
     statusInterno: ehStatusInterno(valorStatus) ? valorStatus : null,
-    anotacao: nota ? { texto: nota.texto, atualizadoEm: new Date(nota.atualizado_em).toISOString() } : null,
+    finalizacao: linhaStatus ? finalizacaoSeFinal(linhaStatus) : null,
+    atas,
     tarefas: (tarefas as Record<string, unknown>[]).map(mapearTarefa),
     responsaveis,
   }
@@ -78,15 +85,23 @@ export interface ItemAcompanhado {
   tipo: string | null // selo do aviso (null pra edital)
   favorito: boolean
   statusInterno: StatusInterno | null
+  // Resultado da janela "Finalizar" (2026-10-27); null em item aberto ou
+  // finalizado antes dela existir.
+  finalizacao: Finalizacao | null
   abertura: string | null
   valorEstimado: number | null
   linkPortal: string | null
   proximaTarefa: Tarefa | null
+  // Último fato do PNCP na linha do tempo (lib/acompanhamento-pncp.ts);
+  // "nova" = capturado depois da última vez que o edital foi aberto.
+  ultimaMovimentacao: { descricao: string; data: string; nova: boolean } | null
 }
 
 export function passaNoFiltro(item: ItemAcompanhado, filtro: FiltroAcompanhamento): boolean {
   if (filtro === 'todas') return true
-  if (filtro === 'favoritadas') return item.favorito
+  // Favoritada = ainda avaliando se vai participar (pedido do usuário, 2026-10-07). Com
+  // status, o item sai dessa aba e fica só na do status — antes aparecia nas duas.
+  if (filtro === 'favoritadas') return item.favorito && item.statusInterno === null
   return item.statusInterno === filtro
 }
 
@@ -96,15 +111,29 @@ export function passaNoFiltro(item: ItemAcompanhado, filtro: FiltroAcompanhament
 export async function listarAcompanhamento(): Promise<ItemAcompanhado[]> {
   const [editaisBruto, statusAvisos, tarefasBruto] = await Promise.all([
     sql`
-      SELECT e.id, e.numero_controle_pncp, e.objeto_compra, e.orgao_razao_social, e.municipio_nome,
+      SELECT e.id, e.numero_controle_pncp, e.objeto_compra, e.orgao_razao_social, e.orgao_cnpj, e.municipio_nome,
              e.raw_json->>'numeroCompra' AS numero_compra, e.ano_compra, e.valor_total_estimado,
-             e.data_abertura_proposta, e.link_sistema_origem, s.favorito, s.status_interno
+             e.data_abertura_proposta, e.data_encerramento_proposta, e.data_publicacao_pncp, e.modalidade_nome,
+             e.link_sistema_origem, s.favorito, s.status_interno,
+             s.resultado, s.valor_ganho, s.observacao_final, s.finalizada_em,
+             ult.descricao AS mov_descricao, ult.quando AS mov_quando,
+             EXISTS (
+               SELECT 1 FROM edital_eventos ev
+               WHERE ev.edital_id = e.id AND ev.capturado_em > COALESCE(s.movimentacao_vista_em, '-infinity')
+             ) AS mov_nova
       FROM editais e
       JOIN edital_status s ON s.edital_id = e.id
+      LEFT JOIN LATERAL (
+        SELECT ev.descricao, COALESCE(ev.data_fato, ev.capturado_em) AS quando
+        FROM edital_eventos ev
+        WHERE ev.edital_id = e.id
+        ORDER BY COALESCE(ev.data_fato, ev.capturado_em) DESC, ev.id DESC
+        LIMIT 1
+      ) ult ON TRUE
       WHERE s.favorito OR s.status_interno IS NOT NULL
     `,
     sql`
-      SELECT fonte, aviso_id FROM diario_status
+      SELECT fonte, aviso_id, status_interno, resultado, valor_ganho, observacao_final, finalizada_em FROM diario_status
       WHERE favorito OR status_interno IS NOT NULL
     `,
     sql`
@@ -130,21 +159,48 @@ export async function listarAcompanhamento(): Promise<ItemAcompanhado[]> {
       fonte: 'pncp' as const,
       id: e.id as number,
       objeto: e.objeto_compra as string,
-      detalhe: [e.orgao_razao_social, e.municipio_nome, numero].filter(Boolean).join(' · '),
+      detalhe: [
+        rotuloDoOrgao(e.orgao_cnpj as string | null, e.orgao_razao_social as string | null),
+        e.municipio_nome,
+        numero,
+      ]
+        .filter(Boolean)
+        .join(' · '),
       href: `/edital/${encodeURIComponent(e.numero_controle_pncp as string)}`,
       tipo: null,
       favorito: Boolean(e.favorito),
       statusInterno: ehStatusInterno(e.status_interno) ? e.status_interno : null,
-      abertura: (e.data_abertura_proposta as string | null) ?? null,
+      finalizacao: finalizacaoSeFinal(e),
+      // Encerramento = limite da proposta, a data da sessão (pedido do usuário,
+      // 2026-10-14); no PNCP "abertura" é só o início do recebimento.
+      // Dispensa sem data no PNCP entra com o prazo estimado (lib/prazo.ts).
+      abertura:
+        (e.data_encerramento_proposta as string | null) ??
+        (e.data_abertura_proposta as string | null) ??
+        prazoEstimadoDispensa({
+          modalidade: e.modalidade_nome as string | null,
+          aberturaProposta: null,
+          encerramentoProposta: e.data_encerramento_proposta as string | null,
+          publicacao: e.data_publicacao_pncp as string | null,
+        }),
       valorEstimado: e.valor_total_estimado === null ? null : Number(e.valor_total_estimado),
       linkPortal: (e.link_sistema_origem as string | null) ?? null,
       proximaTarefa: proxima.get(chave) ?? null,
+      ultimaMovimentacao: e.mov_descricao
+        ? {
+            descricao: e.mov_descricao as string,
+            data: new Date(e.mov_quando as string).toISOString(),
+            nova: Boolean(e.mov_nova),
+          }
+        : null,
     }
   })
 
   const ids = idsPorFonteVazio()
-  for (const s of statusAvisos as { fonte: FonteDiario; aviso_id: number }[]) {
+  const finalizacaoAviso = new Map<string, Finalizacao | null>()
+  for (const s of statusAvisos as (Record<string, unknown> & { fonte: FonteDiario; aviso_id: number })[]) {
     if (s.fonte in ids) ids[s.fonte].push(s.aviso_id)
+    finalizacaoAviso.set(`${s.fonte}:${s.aviso_id}`, finalizacaoSeFinal(s))
   }
 
   for (const a of await buscarAvisosPorIds(ids)) {
@@ -159,14 +215,29 @@ export async function listarAcompanhamento(): Promise<ItemAcompanhado[]> {
       tipo: a.tipo,
       favorito: a.favorito,
       statusInterno: ehStatusInterno(a.statusInterno) ? a.statusInterno : null,
+      finalizacao: finalizacaoAviso.get(chave) ?? null,
       abertura: a.dataSessao ?? prazoEstimadoDoAviso(a.fonte, a.tipo, a.dia),
       valorEstimado: null,
       linkPortal: a.url,
       proximaTarefa: proxima.get(chave) ?? null,
+      // Aviso de diário não tem histórico no PNCP.
+      ultimaMovimentacao: null,
     })
   }
 
   return itens
+}
+
+// Resultado só vale com o item ainda em etapa final (gravarEtapa apaga ao
+// reabrir, mas linha antiga pode ter sobrado).
+function finalizacaoSeFinal(l: Record<string, unknown>): Finalizacao | null {
+  if (l.status_interno !== 'finalizada' && l.status_interno !== 'ganha') return null
+  return mapearFinalizacao({
+    resultado: l.resultado,
+    valor_ganho: l.valor_ganho,
+    observacao_final: l.observacao_final,
+    finalizada_em: l.finalizada_em,
+  })
 }
 
 // Mesma regra do boletim: cotação e aquisição judicial sem data contam como
@@ -239,6 +310,20 @@ export async function listarTodasAsTarefas(): Promise<TarefaComItem[]> {
       itemHref: `/aviso/${tarefa.fonte}/${tarefa.itemId}`,
     }
   })
+}
+
+// Badge de "Andamento" na barra lateral: editais acompanhados com
+// movimentação do PNCP ainda não vista (some ao abrir o edital).
+export async function contarMovimentacoesNovas(): Promise<number> {
+  const linhas = (await sql`
+    SELECT COUNT(*)::int AS n FROM edital_status s
+    WHERE (s.favorito OR s.status_interno IS NOT NULL)
+      AND EXISTS (
+        SELECT 1 FROM edital_eventos ev
+        WHERE ev.edital_id = s.edital_id AND ev.capturado_em > COALESCE(s.movimentacao_vista_em, '-infinity')
+      )
+  `) as { n: number }[]
+  return linhas[0].n
 }
 
 // Badge de "Tarefas" na barra lateral: pendentes vencidas ou que vencem hoje.

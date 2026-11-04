@@ -1,8 +1,8 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { TabelaDoMes } from '@/components/arquivo/tabela-do-mes'
-import { ResultadosDaBusca } from '@/components/arquivo/resultados-da-busca'
-import { buscarNoArquivo, mesMaisRecente, mesValido, resumoDoMes } from '@/lib/arquivo'
+import { mesMaisRecente, mesValido, resumoDoMes } from '@/lib/arquivo'
+import { lerFiltros, paraQueryString } from '@/lib/pesquisa'
 
 const NOME_MES = new Intl.DateTimeFormat('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' })
 
@@ -38,15 +38,15 @@ export default async function BoletinsAnteriores({ searchParams }: PageProps<'/a
   const mesParam = typeof params.mes === 'string' ? params.mes : undefined
   const termo = typeof params.q === 'string' ? params.q.trim() : ''
 
+  // A busca daqui virou a Pesquisa de licitações (2026-10-06): mesma coisa,
+  // com filtros e o PNCP ao vivo. Abertas e encerradas, como era aqui.
+  if (termo) {
+    redirect(`/pesquisa?${paraQueryString({ ...lerFiltros({}), enviado: true, q: termo, abertas: false })}`)
+  }
+
   if (mesParam !== undefined && !mesValido(mesParam)) redirect('/arquivo')
   const mes = mesValido(mesParam) ? mesParam : await mesMaisRecente()
-  // Busca com 1 letra devolveria meio banco — a partir de 2.
-  const buscando = termo.length >= 2
-
-  const [resumo, busca] = await Promise.all([
-    buscando ? null : resumoDoMes(mes),
-    buscando ? buscarNoArquivo(termo) : null,
-  ])
+  const resumo = await resumoDoMes(mes)
 
   return (
     <>
@@ -54,7 +54,7 @@ export default async function BoletinsAnteriores({ searchParams }: PageProps<'/a
         <div className="flex grow flex-col gap-1">
           <h1 className="m-0 font-display text-[26px] font-semibold -tracking-[0.01em]">Boletins anteriores</h1>
           <p className="m-0 text-[13px] text-muted">
-            Todo boletim fica guardado. A busca cobre todos os meses, vistos ou não.
+            Todo boletim fica guardado. A busca leva pra Pesquisa, que cobre todos os meses e o PNCP.
           </p>
         </div>
         <form action="/arquivo" method="get" className="flex items-center gap-2">
@@ -74,66 +74,49 @@ export default async function BoletinsAnteriores({ searchParams }: PageProps<'/a
         </form>
       </header>
 
-      {busca ? (
-        <div className="flex grow flex-col gap-3 bg-bg px-6 py-4">
-          <div className="flex items-center gap-3 text-[12.5px] text-muted">
-            <span>
-              {busca.total === 0
-                ? `Nada encontrado para “${termo}”.`
-                : `${busca.total} ${busca.total === 1 ? 'resultado' : 'resultados'} para “${termo}”`}
-              {busca.total > busca.resultados.length && ` · mostrando os ${busca.resultados.length} mais recentes`}
-            </span>
-            <Link href={`/arquivo?mes=${mes}`} className="text-accent underline hover:text-accent-strong">
-              limpar busca
-            </Link>
-          </div>
-          {busca.resultados.length > 0 && <ResultadosDaBusca resultados={busca.resultados} />}
-        </div>
-      ) : (
-        resumo && (
-          <>
-            <div className="flex items-center gap-3 border-b border-border px-6 py-3.5">
-              <div className="flex items-center gap-2">
-                {resumo.anterior ? (
-                  <Link href={`/arquivo?mes=${resumo.anterior}`} aria-label="Mês anterior" className={CLASSE_SETA}>
-                    <Seta direcao="anterior" />
-                  </Link>
-                ) : (
-                  <span aria-hidden="true" className={CLASSE_SETA_INATIVA}>
-                    <Seta direcao="anterior" />
-                  </span>
-                )}
-                <span className="min-w-[128px] text-center text-[13.5px] font-semibold">{nomeDoMes(mes)}</span>
-                {resumo.proximo ? (
-                  <Link href={`/arquivo?mes=${resumo.proximo}`} aria-label="Próximo mês" className={CLASSE_SETA}>
-                    <Seta direcao="proximo" />
-                  </Link>
-                ) : (
-                  <span aria-hidden="true" className={CLASSE_SETA_INATIVA}>
-                    <Seta direcao="proximo" />
-                  </span>
-                )}
-              </div>
-              <div className="grow" />
-              <span className="text-[12.5px] text-muted">
-                {nomeDoMes(mes).split(' ')[0]}: {resumo.totais.nosFiltros} da área da saúde ·{' '}
-                {resumo.totais.favoritados} {resumo.totais.favoritados === 1 ? 'favoritado' : 'favoritados'} ·{' '}
-                {resumo.totais.naoVistos} ainda não {resumo.totais.naoVistos === 1 ? 'visto' : 'vistos'}
-              </span>
-            </div>
-
-            <div className="flex grow flex-col bg-bg px-6 py-3">
-              {resumo.dias.length === 0 ? (
-                <p className="m-0 py-8 text-center text-[13px] text-muted">Nenhum boletim neste mês.</p>
+      {resumo && (
+        <>
+          <div className="flex items-center gap-3 border-b border-border px-6 py-3.5">
+            <div className="flex items-center gap-2">
+              {resumo.anterior ? (
+                <Link href={`/arquivo?mes=${resumo.anterior}`} aria-label="Mês anterior" className={CLASSE_SETA}>
+                  <Seta direcao="anterior" />
+                </Link>
               ) : (
-                <TabelaDoMes dias={resumo.dias} />
+                <span aria-hidden="true" className={CLASSE_SETA_INATIVA}>
+                  <Seta direcao="anterior" />
+                </span>
               )}
-              <p className="m-0 mt-3.5 px-0.5 text-[12.5px] text-muted">
-                Fim de semana e feriado não geram boletim. Dia útil sem publicação aparece com zero, não some da lista.
-              </p>
+              <span className="min-w-[128px] text-center text-[13.5px] font-semibold">{nomeDoMes(mes)}</span>
+              {resumo.proximo ? (
+                <Link href={`/arquivo?mes=${resumo.proximo}`} aria-label="Próximo mês" className={CLASSE_SETA}>
+                  <Seta direcao="proximo" />
+                </Link>
+              ) : (
+                <span aria-hidden="true" className={CLASSE_SETA_INATIVA}>
+                  <Seta direcao="proximo" />
+                </span>
+              )}
             </div>
-          </>
-        )
+            <div className="grow" />
+            <span className="text-[12.5px] text-muted">
+              {nomeDoMes(mes).split(' ')[0]}: {resumo.totais.nosFiltros} da área da saúde ·{' '}
+              {resumo.totais.favoritados} {resumo.totais.favoritados === 1 ? 'acompanhado' : 'acompanhados'} ·{' '}
+              {resumo.totais.naoVistos} ainda não {resumo.totais.naoVistos === 1 ? 'visto' : 'vistos'}
+            </span>
+          </div>
+
+          <div className="flex grow flex-col bg-bg px-6 py-3">
+            {resumo.dias.length === 0 ? (
+              <p className="m-0 py-8 text-center text-[13px] text-muted">Nenhum boletim neste mês.</p>
+            ) : (
+              <TabelaDoMes dias={resumo.dias} />
+            )}
+            <p className="m-0 mt-3.5 px-0.5 text-[12.5px] text-muted">
+              Fim de semana e feriado não geram boletim. Dia útil sem publicação aparece com zero, não some da lista.
+            </p>
+          </div>
+        </>
       )}
     </>
   )

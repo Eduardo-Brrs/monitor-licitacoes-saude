@@ -3,6 +3,8 @@ import { sql } from '@/lib/db'
 import { buscarItens, type PncpContratacao } from '@/lib/pncp'
 import { encontrarPalavrasChave } from '@/lib/keywords'
 import { salvarEdital } from '@/lib/editais'
+import { rodarFila } from '@/lib/fila'
+import { FILA_VERIFICAR_ITENS, registroDaFila } from '@/lib/fila-falhas'
 
 export const maxDuration = 60
 
@@ -17,10 +19,12 @@ const PAUSA_ENTRE_CHAMADAS_MS = 800
 // (já vimos timeout de até 20s por chamada), processar o lote inteiro pode
 // estourar os 60s antes de chegar no INSERT final de sync_runs — mesmo
 // problema já visto no /api/sync antes do fix de timeout. Corta a folha de
-// itens novos bem antes do limite (35s), deixando margem pra uma chamada em
-// andamento ainda poder demorar até os 20s do próprio timeout do PNCP sem
-// estourar os 60s — o resto fica pendente pro próximo lote (30min depois).
-const ORCAMENTO_MS = 35_000
+// itens novos bem antes do limite (30s), deixando margem pra uma chamada em
+// andamento ainda poder demorar até os 25s do orçamento de retry do PNCP
+// (lib/pncp.ts) sem estourar os 60s — o resto fica pendente pro próximo lote
+// (30min depois). Era 35s até 2026-10-22, quando o retry passou a usar o
+// orçamento inteiro em vez de desistir aos 20s.
+const ORCAMENTO_MS = 30_000
 
 interface ItemPendente {
   numero_controle_pncp: string
@@ -28,10 +32,6 @@ interface ItemPendente {
   ano_compra: number
   sequencial_compra: number
   contratacao_json: PncpContratacao
-}
-
-function esperar(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export async function GET(request: Request) {
@@ -50,18 +50,23 @@ export async function GET(request: Request) {
 
   try {
     const pendentes = (await sql`
-      SELECT numero_controle_pncp, orgao_cnpj, ano_compra, sequencial_compra, contratacao_json
-      FROM itens_pendentes
-      WHERE status = 'pendente'
-      ORDER BY data_encerramento_proposta ASC NULLS LAST, data_abertura_proposta ASC NULLS LAST
+      SELECT p.numero_controle_pncp, p.orgao_cnpj, p.ano_compra, p.sequencial_compra, p.contratacao_json
+      FROM itens_pendentes p
+      LEFT JOIN fila_falhas f ON f.fila = ${FILA_VERIFICAR_ITENS} AND f.chave = p.numero_controle_pncp
+      WHERE p.status = 'pendente'
+      ORDER BY f.falhou_em ASC NULLS FIRST, p.data_encerramento_proposta ASC NULLS LAST, p.data_abertura_proposta ASC NULLS LAST
       LIMIT ${TAMANHO_LOTE}
     `) as ItemPendente[]
 
-    for (const pendente of pendentes) {
-      if (Date.now() - startedAt.getTime() > ORCAMENTO_MS) break
-      totalVerificados++
-
-      try {
+    // Compra que falha continua 'pendente' e vai pro fim da fila na próxima
+    // rodada. Antes ela voltava pra frente e podia consumir o lote inteiro.
+    const fila = await rodarFila({
+      itens: pendentes,
+      chave: (pendente) => pendente.numero_controle_pncp,
+      orcamentoMs: ORCAMENTO_MS,
+      pausaMs: PAUSA_ENTRE_CHAMADAS_MS,
+      registro: registroDaFila(FILA_VERIFICAR_ITENS),
+      processar: async (pendente) => {
         const itens = await buscarItens(pendente.orgao_cnpj, pendente.ano_compra, pendente.sequencial_compra)
         const descricoes = itens.map((item) => item.descricao).join(' \n ')
         const palavrasChave = encontrarPalavrasChave(descricoes)
@@ -79,14 +84,10 @@ export async function GET(request: Request) {
             WHERE numero_controle_pncp = ${pendente.numero_controle_pncp}
           `
         }
-      } catch {
-        // Falha buscando os itens dessa compra específica (ex: timeout
-        // pontual do PNCP) — deixa como 'pendente' pra tentar de novo no
-        // próximo lote, em vez de abortar o resto do lote atual.
-      }
-
-      await esperar(PAUSA_ENTRE_CHAMADAS_MS)
-    }
+      },
+    })
+    totalVerificados = fila.tentados
+    if (fila.tentados > 0 && fila.concluidos === 0) erro = fila.ultimoErro
   } catch (err) {
     erro = err instanceof Error ? err.message : String(err)
   }

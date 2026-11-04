@@ -1,8 +1,15 @@
 import Link from 'next/link'
 import type { EditalDetalhe } from '@/lib/edital'
 import { diasAteAbertura, formatarDataCompleta, formatarDataHora } from '@/lib/formato'
+import { EXPLICACAO_PRAZO_ESTIMADO } from '@/lib/prazo'
 
-function chipDePrazo(abertura: string | null) {
+function chipDePrazo(abertura: string | null, prazoEstimado: string | null) {
+  if (!abertura && prazoEstimado) {
+    const dias = diasAteAbertura(prazoEstimado) ?? 0
+    const quando = formatarDataHora(prazoEstimado)
+    if (dias < 0) return { texto: `Prazo estimado passou — ${quando}`, urgente: false, estimado: true }
+    return { texto: `Prazo estimado — ${quando}`, urgente: dias <= 2, estimado: true }
+  }
   const dias = diasAteAbertura(abertura)
   if (dias === null) return { texto: 'Sem data de abertura', urgente: false }
 
@@ -14,7 +21,8 @@ function chipDePrazo(abertura: string | null) {
 }
 
 export function CabecalhoEdital({ edital }: { edital: EditalDetalhe }) {
-  const prazo = chipDePrazo(edital.aberturaProposta)
+  // Limite da proposta (dia da sessão), não o início do recebimento (2026-10-14).
+  const prazo = chipDePrazo(edital.encerramentoProposta ?? edital.aberturaProposta, edital.prazoEstimado)
 
   const identificacao = [
     edital.modalidade && edital.numeroCompra
@@ -68,6 +76,7 @@ export function CabecalhoEdital({ edital }: { edital: EditalDetalhe }) {
               ? 'border-[#ebd3c7] bg-warn-soft text-warn'
               : 'border-border-strong bg-surface text-muted'
           }`}
+          title={"estimado" in prazo ? EXPLICACAO_PRAZO_ESTIMADO : undefined}
         >
           {prazo.texto}
         </span>

@@ -1,15 +1,13 @@
 name: Sync PNCP
 
 on:
-  schedule:
-    # Horários em UTC = 9h, 14h e 20h em Maceió (UTC-3), pra bater com a cadência do ConLicitação
-    - cron: '0 12 * * *'
-    - cron: '0 17 * * *'
-    - cron: '0 23 * * *'
+  # Agendamento migrou pro cron-job.org em 2026-10-02 (ver docs/operacao.md).
+  # Fica só o disparo manual, como reserva.
   workflow_dispatch: {}
 
 jobs:
   sync:
+    if: github.repository != 'Eduardo-Brrs/monitor-licitacoes-saude'  # cópia pública: sem secrets, não roda
     runs-on: ubuntu-latest
     steps:
       - name: Chamar /api/sync

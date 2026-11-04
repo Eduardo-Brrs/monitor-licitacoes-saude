@@ -1,3 +1,5 @@
+import { paraData } from '@/lib/formato'
+
 // CSV pro Excel em português: separador ";" (a vírgula é o decimal no
 // Brasil, com "," o Excel junta tudo numa coluna só) e BOM UTF-8 no começo
 // (sem ele o Excel abre como ANSI e estraga os acentos).
@@ -39,5 +41,5 @@ export function dataCsv(iso: string | null, comHora = false): string {
     month: '2-digit',
     year: 'numeric',
     ...(comHora ? { hour: '2-digit', minute: '2-digit' } : {}),
-  }).format(new Date(iso))
+  }).format(paraData(iso))
 }

@@ -1,7 +1,9 @@
 import Link from 'next/link'
-import { IconeEstrela } from '@/components/icons'
+import { BotoesEtapaLinha } from '@/components/boletim/botoes-etapa-linha'
+import { etapaDe } from '@/lib/acompanhamento-tipos'
 import type { EditalDoBoletim } from '@/lib/boletim'
 import { formatarDiaMes, formatarValor, prazoEstaCurto } from '@/lib/formato'
+import { EXPLICACAO_PRAZO_ESTIMADO } from '@/lib/prazo'
 
 // As seis informações da linha são fechadas por decisão de design
 // (docs/design/DESIGN.md): objeto, órgão, município/UF, modalidade, valor e
@@ -12,6 +14,7 @@ type Props = {
   selecionado: boolean
   onSelecionar: () => void
   onFavoritar: () => void
+  onGerenciar: () => void
   onDescartar: () => void
   onAbrir: () => void
 }
@@ -38,11 +41,12 @@ export function LinhaEdital({
   selecionado,
   onSelecionar,
   onFavoritar,
+  onGerenciar,
   onDescartar,
   onAbrir,
 }: Props) {
-  const { visto, favorito } = edital
-  const prazoCurto = prazoEstaCurto(edital.aberturaProposta)
+  const { visto } = edital
+  const prazoCurto = prazoEstaCurto(edital.aberturaProposta ?? edital.prazoEstimado)
 
   const metadados = [
     edital.orgao,
@@ -52,6 +56,9 @@ export function LinhaEdital({
     // Anexo é o que se lê pra decidir (pedido de 2026-09-24): a contagem na
     // linha mostra que estão lá antes de abrir. Sem cópia ainda, não diz nada.
     edital.anexos === null ? null : edital.anexos === 0 ? 'sem anexo' : `${edital.anexos} ${edital.anexos === 1 ? 'anexo' : 'anexos'}`,
+    // Entrou num boletim depois do dia da publicação (boletim pela captura,
+    // 2026-10-06) — sem isso parece publicação de hoje.
+    edital.publicadoEm < edital.boletimDia ? `publicado ${formatarDiaMes(`${edital.publicadoEm}T12:00:00Z`)}` : null,
   ].filter(Boolean) as string[]
 
   return (
@@ -113,29 +120,17 @@ export function LinhaEdital({
         className={`w-[92px] shrink-0 text-right text-[12.5px] ${
           visto ? 'text-faint' : prazoCurto ? 'font-medium text-warn' : 'text-muted'
         }`}
+        title={!edital.aberturaProposta && edital.prazoEstimado ? EXPLICACAO_PRAZO_ESTIMADO : undefined}
       >
-        {edital.aberturaProposta ? `abre ${formatarDiaMes(edital.aberturaProposta)}` : 'sem data'}
+        {edital.aberturaProposta
+          ? `abre ${formatarDiaMes(edital.aberturaProposta)}`
+          : edital.prazoEstimado
+            ? `até ~${formatarDiaMes(edital.prazoEstimado)}`
+            : 'sem data'}
       </span>
 
       <div className="flex shrink-0 gap-1.5">
-        <button
-          type="button"
-          onClick={onFavoritar}
-          aria-label={favorito ? 'Desfavoritar edital' : 'Favoritar edital'}
-          // Tooltip nativo com o atalho: sem ele o ícone sozinho não diz o que
-          // faz, e é o jeito de descobrir o teclado sem ler a faixa de filtros.
-          title={favorito ? 'Tirar dos favoritos (F)' : 'Favoritar (F)'}
-          aria-pressed={favorito}
-          className={`flex size-10 items-center justify-center rounded-control border ${
-            favorito
-              ? 'border-accent bg-accent-soft text-accent-strong'
-              : visto
-                ? 'border-[#e0ddd6] bg-surface text-muted hover:text-ink'
-                : 'border-border-strong bg-surface text-ink'
-          }`}
-        >
-          <IconeEstrela size={17} />
-        </button>
+        <BotoesEtapaLinha etapa={etapaDe(edital)} visto={visto} onFavoritar={onFavoritar} onGerenciar={onGerenciar} />
         <button
           type="button"
           onClick={onDescartar}

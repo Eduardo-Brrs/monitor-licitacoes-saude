@@ -14,8 +14,11 @@ import {
 } from '@/lib/doe'
 import { extrairDataSessao } from '@/lib/diario-municipal'
 import { encontrarPalavrasChave, palavrasChaveDeDiario, termosDeSegmentos, SEGMENTO_CAPTURA_AMPLA } from '@/lib/keywords'
+import { ordenarPorFalha, rodarFila } from '@/lib/fila'
+import { FILA_DOE_EDICOES, falhasDaFila, registroDaFila } from '@/lib/fila-falhas'
 
-export const maxDuration = 60
+// 120s desde 2026-11-04: edição de 16 MB leva ~17s pra baixar e ~8s pra ler.
+export const maxDuration = 120
 
 // Janela bem maior que o /api/sync do PNCP (3 dias) de propósito: o boletim do
 // ConLicitação mostrou hoje (10/09) itens de "aquisição judicial" cuja
@@ -81,22 +84,28 @@ const OFFSET_PAGINA_ID_FALLBACK = 10_000_000_000
 //
 // Complemento de 2026-09-23: edition_number sozinho também não basta — o
 // suplemento do dia tem o MESMO número da edição normal. Identidade de edição
-// passa a ser (edition_number, suplemento). Ver lib/schema.sql.
+// passa a ser (edition_number, suplemento). Ver migrations/001_estado_inicial.sql.
 
 // Página de suplemento ganha um deslocamento a mais no pagina_id sintético,
 // pra não colidir com a mesma página da edição normal de mesmo número.
 const OFFSET_PAGINA_ID_SUPLEMENTO = 1_000_000_000
 
 // Orçamento de tempo pro fallback especificamente (dentro do maxDuration de
-// 60s da rota inteira) — mesmo padrão do /api/verificar-itens: numa primeira
+// 120s da rota inteira) — mesmo padrão do /api/verificar-itens: numa primeira
 // rodada (backfill de várias edições da janela de 14 dias) processar tudo de
 // uma vez pode estourar o tempo; o resto fica pra próxima chamada do cron.
-const ORCAMENTO_FALLBACK_MS = 35_000
+const ORCAMENTO_FALLBACK_MS = 60_000
+// Abaixo disso não começa edição nova; acima, o PDF usa no máximo 45s.
+const MINIMO_POR_EDICAO_MS = 10_000
+const LIMITE_PDF_MS = 45_000
 
 interface ResultadoFallback {
   totalApi: number
   totalMatched: number
   totalNovos: number
+  edicoesLidas: number
+  edicoesComFalha: number
+  ultimoErro: string | null
   // Avisos de licitação (Pregão Eletrônico estadual) — ver
   // extrairAvisosLicitacao em lib/doe.ts. Contados à parte e registrados numa
   // linha própria de sync_runs, pra não misturar com a aquisição judicial.
@@ -250,12 +259,20 @@ async function corrigirIdsRepublicados(edicoes: DoeEdicaoPublicada[]): Promise<n
   return corrigidas
 }
 
+// Número sozinho não basta: edição normal e suplemento têm o mesmo número, e o
+// id muda quando a Imprensa Oficial republica.
+function chaveDaEdicao(edicao: DoeEdicaoPublicada): string {
+  return `${edicao.number}${edicao.suplement ? '-suplemento' : ''}`
+}
+
 async function rodarFallbackPdf(dataCorte: Date): Promise<ResultadoFallback> {
-  const inicio = Date.now()
   const resultado: ResultadoFallback = {
     totalApi: 0,
     totalMatched: 0,
     totalNovos: 0,
+    edicoesLidas: 0,
+    edicoesComFalha: 0,
+    ultimoErro: null,
     licitacoes: { ...CONTAGEM_VAZIA },
     cotacoes: { ...CONTAGEM_VAZIA },
     linksCorrigidos: 0,
@@ -271,99 +288,115 @@ async function rodarFallbackPdf(dataCorte: Date): Promise<ResultadoFallback> {
     console.error('sync-doe: falha ao corrigir ids republicados', err)
   }
 
-  const edicoesNaJanela = edicoes.filter((e) => new Date(e.publication_date) >= dataCorte)
+  // Mais recente primeiro: o que acabou de sair entra antes do backlog.
+  const edicoesNaJanela = edicoes
+    .filter((e) => new Date(e.publication_date) >= dataCorte)
+    .sort((a, b) => b.publication_date.localeCompare(a.publication_date))
 
-  for (const edicao of edicoesNaJanela) {
-    if (Date.now() - inicio > ORCAMENTO_FALLBACK_MS) break
-
-    const verificacao = await sql`
-      SELECT licitacoes_verificadas_em, cotacoes_verificadas_em FROM doe_al_edicoes_verificadas
-      WHERE edition_number = ${edicao.number} AND suplemento = ${edicao.suplement}
-    `
-    const faltaJudicial = verificacao.length === 0
-    const faltaLicitacoes = faltaJudicial || verificacao.some((v) => v.licitacoes_verificadas_em === null)
-    const faltaCotacoes = faltaJudicial || verificacao.some((v) => v.cotacoes_verificadas_em === null)
-    if (!faltaJudicial && !faltaLicitacoes && !faltaCotacoes) continue
-
-    // Baixa e extrai o PDF uma vez só, pros três extratores.
-    const paginasPdf = await extrairPaginasPdf(edicao.id)
-
-    if (faltaLicitacoes) {
-      const { extraidos, novos } = await salvarAvisosLicitacao(edicao, paginasPdf)
-      resultado.licitacoes.edicoesLidas++
-      resultado.licitacoes.avisosExtraidos += extraidos
-      resultado.licitacoes.avisosNovos += novos
-    }
-
-    if (faltaCotacoes) {
-      const { extraidos, novos } = await salvarAvisosCotacao(edicao, paginasPdf)
-      resultado.cotacoes.edicoesLidas++
-      resultado.cotacoes.avisosExtraidos += extraidos
-      resultado.cotacoes.avisosNovos += novos
-    }
-
-    if (!faltaJudicial) {
-      // Edição verificada antes de existir o extrator de licitações ou o de
-      // cotações (ou com edition_id diferente, ver comentário do bug de
-      // 2026-09-21 acima) — só completa a parte que faltava.
-      await sql`
-        UPDATE doe_al_edicoes_verificadas
-        SET licitacoes_verificadas_em = COALESCE(licitacoes_verificadas_em, NOW()),
-            cotacoes_verificadas_em = COALESCE(cotacoes_verificadas_em, NOW())
-        WHERE edition_number = ${edicao.number} AND suplemento = ${edicao.suplement}
-      `
-      continue
-    }
-
-    resultado.totalApi++
-    const paginas = buscarFraseNasPaginas(paginasPdf, FRASE_ANCORA)
-
-    for (const pagina of paginas) {
-      // Se a busca normal já capturou essa mesma página dessa edição (pagina
-      // real, não sintética), não duplica — só complementa o que ela não
-      // achou.
-      // doe_al_matches não distingue suplemento, então a checagem por página
-      // só vale pra edição normal — suplemento fica só com o ON CONFLICT do
-      // pagina_id sintético.
-      if (!edicao.suplement) {
-        const jaExiste = await sql`
-          SELECT 1 FROM doe_al_matches WHERE edition_number = ${edicao.number} AND page_number = ${pagina.pageNumber}
-        `
-        if (jaExiste.length > 0) continue
-      }
-
-      resultado.totalMatched++
-      const snippet = pagina.trechos.join(' \n ')
-      const palavrasChave = encontrarPalavrasChave(snippet, TERMOS_DOE)
-      const paginaIdSintetico =
-        OFFSET_PAGINA_ID_FALLBACK +
-        (edicao.suplement ? OFFSET_PAGINA_ID_SUPLEMENTO : 0) +
-        edicao.number * 1000 +
-        pagina.pageNumber
-
-      const inseridos = await sql`
-        INSERT INTO doe_al_matches (
-          pagina_id, edition_id, edition_number, page_number,
-          publication_date, processo_numero, keywords_matched, snippet, pdf_url, fonte
-        ) VALUES (
-          ${paginaIdSintetico}, ${edicao.id}, ${edicao.number}, ${pagina.pageNumber},
-          ${edicao.publication_date}, ${extrairProcesso(snippet)}, ${palavrasChave}, ${snippet},
-          ${urlPdfEdicao(edicao.id)}, 'pdf_fallback'
-        )
-        ON CONFLICT (pagina_id) DO NOTHING
-        RETURNING id
-      `
-      if (inseridos.length > 0) resultado.totalNovos++
-    }
-
-    await sql`
-      INSERT INTO doe_al_edicoes_verificadas (edition_id, edition_number, suplemento, publication_date, ocorrencias, licitacoes_verificadas_em, cotacoes_verificadas_em)
-      VALUES (${edicao.id}, ${edicao.number}, ${edicao.suplement}, ${edicao.publication_date}, ${paginas.length}, NOW(), NOW())
-      ON CONFLICT (edition_id) DO NOTHING
-    `
-  }
+  // Edição com problema não segura as outras: em 03/11 a 2917 (16 MB) estourou
+  // o tempo e travou a leitura de tudo que vinha depois (ver lib/fila.ts).
+  const falhas = await falhasDaFila(FILA_DOE_EDICOES)
+  const fila = await rodarFila({
+    itens: ordenarPorFalha(edicoesNaJanela, chaveDaEdicao, falhas),
+    chave: chaveDaEdicao,
+    orcamentoMs: ORCAMENTO_FALLBACK_MS,
+    minimoMs: MINIMO_POR_EDICAO_MS,
+    registro: registroDaFila(FILA_DOE_EDICOES, falhas),
+    processar: (edicao, restanteMs) => lerEdicao(edicao, resultado, Math.min(LIMITE_PDF_MS, restanteMs)),
+  })
+  resultado.edicoesComFalha = fila.falhas.length
+  resultado.ultimoErro = fila.ultimoErro
 
   return resultado
+}
+
+async function lerEdicao(edicao: DoeEdicaoPublicada, resultado: ResultadoFallback, limitePdfMs: number) {
+  const verificacao = await sql`
+    SELECT licitacoes_verificadas_em, cotacoes_verificadas_em FROM doe_al_edicoes_verificadas
+    WHERE edition_number = ${edicao.number} AND suplemento = ${edicao.suplement}
+  `
+  const faltaJudicial = verificacao.length === 0
+  const faltaLicitacoes = faltaJudicial || verificacao.some((v) => v.licitacoes_verificadas_em === null)
+  const faltaCotacoes = faltaJudicial || verificacao.some((v) => v.cotacoes_verificadas_em === null)
+  if (!faltaJudicial && !faltaLicitacoes && !faltaCotacoes) return
+
+  // Baixa e extrai o PDF uma vez só, pros três extratores.
+  const paginasPdf = await extrairPaginasPdf(edicao.id, limitePdfMs)
+  resultado.edicoesLidas++
+
+  if (faltaLicitacoes) {
+    const { extraidos, novos } = await salvarAvisosLicitacao(edicao, paginasPdf)
+    resultado.licitacoes.edicoesLidas++
+    resultado.licitacoes.avisosExtraidos += extraidos
+    resultado.licitacoes.avisosNovos += novos
+  }
+
+  if (faltaCotacoes) {
+    const { extraidos, novos } = await salvarAvisosCotacao(edicao, paginasPdf)
+    resultado.cotacoes.edicoesLidas++
+    resultado.cotacoes.avisosExtraidos += extraidos
+    resultado.cotacoes.avisosNovos += novos
+  }
+
+  if (!faltaJudicial) {
+    // Edição verificada antes de existir o extrator de licitações ou o de
+    // cotações (ou com edition_id diferente, ver comentário do bug de
+    // 2026-09-21 acima) — só completa a parte que faltava.
+    await sql`
+      UPDATE doe_al_edicoes_verificadas
+      SET licitacoes_verificadas_em = COALESCE(licitacoes_verificadas_em, NOW()),
+          cotacoes_verificadas_em = COALESCE(cotacoes_verificadas_em, NOW())
+      WHERE edition_number = ${edicao.number} AND suplemento = ${edicao.suplement}
+    `
+    return
+  }
+
+  resultado.totalApi++
+  const paginas = buscarFraseNasPaginas(paginasPdf, FRASE_ANCORA)
+
+  for (const pagina of paginas) {
+    // Se a busca normal já capturou essa mesma página dessa edição (pagina
+    // real, não sintética), não duplica — só complementa o que ela não
+    // achou.
+    // doe_al_matches não distingue suplemento, então a checagem por página
+    // só vale pra edição normal — suplemento fica só com o ON CONFLICT do
+    // pagina_id sintético.
+    if (!edicao.suplement) {
+      const jaExiste = await sql`
+        SELECT 1 FROM doe_al_matches WHERE edition_number = ${edicao.number} AND page_number = ${pagina.pageNumber}
+      `
+      if (jaExiste.length > 0) continue
+    }
+
+    resultado.totalMatched++
+    const snippet = pagina.trechos.join(' \n ')
+    const palavrasChave = encontrarPalavrasChave(snippet, TERMOS_DOE)
+    const paginaIdSintetico =
+      OFFSET_PAGINA_ID_FALLBACK +
+      (edicao.suplement ? OFFSET_PAGINA_ID_SUPLEMENTO : 0) +
+      edicao.number * 1000 +
+      pagina.pageNumber
+
+    const inseridos = await sql`
+      INSERT INTO doe_al_matches (
+        pagina_id, edition_id, edition_number, page_number,
+        publication_date, processo_numero, keywords_matched, snippet, pdf_url, fonte
+      ) VALUES (
+        ${paginaIdSintetico}, ${edicao.id}, ${edicao.number}, ${pagina.pageNumber},
+        ${edicao.publication_date}, ${extrairProcesso(snippet)}, ${palavrasChave}, ${snippet},
+        ${urlPdfEdicao(edicao.id)}, 'pdf_fallback'
+      )
+      ON CONFLICT (pagina_id) DO NOTHING
+      RETURNING id
+    `
+    if (inseridos.length > 0) resultado.totalNovos++
+  }
+
+  await sql`
+    INSERT INTO doe_al_edicoes_verificadas (edition_id, edition_number, suplemento, publication_date, ocorrencias, licitacoes_verificadas_em, cotacoes_verificadas_em)
+    VALUES (${edicao.id}, ${edicao.number}, ${edicao.suplement}, ${edicao.publication_date}, ${paginas.length}, NOW(), NOW())
+    ON CONFLICT (edition_id) DO NOTHING
+  `
 }
 
 export async function GET(request: Request) {
@@ -449,6 +482,12 @@ export async function GET(request: Request) {
     licitacoes = fallback.licitacoes
     cotacoes = fallback.cotacoes
     linksCorrigidos = fallback.linksCorrigidos
+    // Erro da rodada só se nenhuma edição foi lida. Edição presa com as outras
+    // andando avisa pelo vigia (lib/fila.ts, itensPresos).
+    if (fallback.edicoesComFalha > 0 && fallback.edicoesLidas === 0) {
+      erroFallback = fallback.ultimoErro
+      erro = erro ? `${erro} | fallback pdf: ${erroFallback}` : `fallback pdf: ${erroFallback}`
+    }
   } catch (err) {
     erroFallback = err instanceof Error ? err.message : String(err)
     erro = erro ? `${erro} | fallback pdf: ${erroFallback}` : `fallback pdf: ${erroFallback}`

@@ -5,8 +5,9 @@ import { usePathname } from 'next/navigation'
 import {
   IconeAcompanhamento,
   IconeArquivo,
+  IconeAtas,
+  IconeBusca,
   IconeCaixaEntrada,
-  IconeEstrela,
   IconeTarefas,
 } from '@/components/icons'
 
@@ -16,6 +17,10 @@ type Props = {
   naoVistos: number
   // Tarefas pendentes vencidas ou que vencem hoje.
   tarefasUrgentes: number
+  // Editais acompanhados com movimentação do PNCP ainda não vista.
+  movimentacoesNovas: number
+  // Atas/contratos em vigor que vencem em até 60 dias.
+  atasVencendo: number
 }
 
 const CLASSE_ITEM =
@@ -67,7 +72,7 @@ function Grupo({ rotulo, children }: { rotulo: string; children: React.ReactNode
   )
 }
 
-export function Nav({ naoVistos, tarefasUrgentes }: Props) {
+export function Nav({ naoVistos, tarefasUrgentes, movimentacoesNovas, atasVencendo }: Props) {
   const rota = usePathname()
   const naCaixaDeEntrada = rota === '/' || rota.startsWith('/boletim')
 
@@ -86,17 +91,28 @@ export function Nav({ naoVistos, tarefasUrgentes }: Props) {
             ) : undefined
           }
         >
-          Caixa de entrada
+          Boletins
         </Item>
-        <Item href="/favoritos" ativo={rota.startsWith('/favoritos')} icone={<IconeEstrela />}>
-          Favoritos
+        <Item href="/pesquisa" ativo={rota.startsWith('/pesquisa')} icone={<IconeBusca />}>
+          Encontrar licitação
         </Item>
         <Item
           href="/acompanhamento"
           ativo={rota.startsWith('/acompanhamento')}
           icone={<IconeAcompanhamento />}
+          badge={
+            movimentacoesNovas > 0 ? (
+              <span
+                title="Licitações com movimentação nova no PNCP"
+                className="shrink-0 rounded-full bg-accent px-1.5 py-0.5 font-mono text-[11px] text-white"
+              >
+                {movimentacoesNovas}
+              </span>
+            ) : undefined
+          }
         >
-          Acompanhamento
+          {/* "Gerenciar licitações" (pedido do usuário, 2026-10-14; antes "Andamento"); a rota continua /acompanhamento. */}
+          Gerenciar licitações
         </Item>
         <Item
           href="/tarefas"
@@ -114,6 +130,20 @@ export function Nav({ naoVistos, tarefasUrgentes }: Props) {
           }
         >
           Tarefas
+        </Item>
+        <Item
+          href="/atas"
+          ativo={rota.startsWith('/atas')}
+          icone={<IconeAtas />}
+          badge={
+            atasVencendo > 0 ? (
+              <span title="Atas e contratos que vencem em até 60 dias" className="shrink-0 font-mono text-[11px] text-[#e3b7a4]">
+                {atasVencendo}
+              </span>
+            ) : undefined
+          }
+        >
+          Atas e contratos
         </Item>
       </Grupo>
 

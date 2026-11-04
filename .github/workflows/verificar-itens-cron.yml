@@ -1,16 +1,13 @@
 name: Verificar Itens Pendentes
 
 on:
-  schedule:
-    # A cada 30min, o dia inteiro — lote pequeno por execução (ver
-    # app/api/verificar-itens/route.ts), diluído ao longo do dia em vez de
-    # processar tudo de uma vez, pra não estourar rate limit do PNCP nem o
-    # tempo máximo da função da Vercel.
-    - cron: '*/30 * * * *'
+  # Agendamento migrou pro cron-job.org em 2026-10-02 (ver docs/operacao.md).
+  # Fica só o disparo manual, como reserva.
   workflow_dispatch: {}
 
 jobs:
   verificar:
+    if: github.repository != 'Eduardo-Brrs/monitor-licitacoes-saude'  # cópia pública: sem secrets, não roda
     runs-on: ubuntu-latest
     steps:
       - name: Chamar /api/verificar-itens

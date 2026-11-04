@@ -2,23 +2,16 @@
 
 import { useState, useTransition } from 'react'
 import { verificarAgora } from '@/app/actions/acompanhamento'
-import { formatarDataHora, formatarDiaMes } from '@/lib/formato'
+import { formatarDataHora } from '@/lib/formato'
 
 // Lateral da tela 04: "Situação no PNCP" (somente leitura, vem do sync —
-// separada do status interno, regra 2), linha do tempo e verificação.
-
-export interface EventoParaTela {
-  tipo: string
-  descricao: string
-  dataFato: string | null
-  capturadoEm: string | null
-}
+// separada do status interno, regra 2) e verificação. Os fatos do PNCP
+// aparecem na linha do tempo da coluna principal desde 2026-10-23.
 
 type Props = {
   editalId: number
   acompanhado: boolean
   situacao: string | null
-  eventos: EventoParaTela[]
   verificadoEm: string | null
   proximaEm: string | null
   erro: string | null
@@ -27,7 +20,7 @@ type Props = {
 const CARTAO = 'flex flex-col gap-2.5 rounded-card border border-border bg-surface p-4'
 const TITULO = 'm-0 text-[11px] font-medium uppercase tracking-[0.05em] text-faint'
 
-export function SituacaoPncp({ editalId, acompanhado, situacao, eventos, verificadoEm, proximaEm, erro }: Props) {
+export function SituacaoPncp({ editalId, acompanhado, situacao, verificadoEm, proximaEm, erro }: Props) {
   const [pendente, iniciar] = useTransition()
   const [erroAgora, setErroAgora] = useState<string | null>(null)
 
@@ -50,37 +43,10 @@ export function SituacaoPncp({ editalId, acompanhado, situacao, eventos, verific
         </span>
         <span className="text-[11.5px] leading-snug text-faint">
           {acompanhado
-            ? 'Somente leitura, vem do PNCP. Resultado, ata e contrato são conferidos a cada 12h.'
-            : 'Favorite (ou dê um status) pra conferir resultado, ata e contrato automaticamente.'}
+            ? 'Somente leitura, vem do PNCP. Documentos novos, mudança de data, resultado, ata e contrato são conferidos a cada 12h e entram na linha do tempo.'
+            : 'Favorite ou gerencie pra acompanhar documentos novos, mudança de data, resultado, ata e contrato.'}
         </span>
       </div>
-
-      {eventos.length > 0 && (
-        <div className="flex flex-col gap-2 border-t border-border pt-2.5">
-          <span className={TITULO}>Linha do tempo</span>
-          <ol className="m-0 flex list-none flex-col gap-2 p-0">
-            {eventos.map((e, i) => (
-              <li key={i} className="flex gap-2.5">
-                <span
-                  aria-hidden="true"
-                  className={`mt-1.5 size-2 shrink-0 rounded-full ${
-                    e.tipo === 'vitoria' ? 'bg-accent' : e.tipo === 'abertura' || e.tipo === 'publicacao' ? 'bg-border-strong' : 'bg-ink-2'
-                  }`}
-                />
-                <div className="flex flex-col">
-                  <span className={`text-[12.5px] ${e.tipo === 'vitoria' ? 'font-medium text-accent-strong' : 'text-ink'}`}>
-                    {e.descricao}
-                  </span>
-                  <span className="text-[11.5px] text-faint">
-                    {e.dataFato ? formatarDiaMes(e.dataFato) : 'sem data'}
-                    {e.capturadoEm && ` · capturado ${formatarDataHora(e.capturadoEm)}`}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </div>
-      )}
 
       <div className="flex flex-col gap-1.5 border-t border-border pt-2.5">
         <span className="text-[11.5px] text-faint">

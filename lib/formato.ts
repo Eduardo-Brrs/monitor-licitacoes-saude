@@ -14,6 +14,23 @@ export function formatarValor(valor: number | null): string {
   return MOEDA.format(valor)
 }
 
+// O PNCP manda data/hora em horário de Brasília SEM fuso ("2026-10-06T08:40:56").
+// Lida como UTC (banco em GMT, servidor da Vercel em UTC) virava 05h40 na tela
+// — toda hora do PNCP aparecia 3h adiantada até 2026-10-06. Acrescenta -03:00
+// em data/hora sem fuso, e data sem hora vira meio-dia (meia-noite UTC cai no
+// dia anterior em Maceió). Valor com fuso, ou Date, passa direto.
+export function comFusoDeBrasilia(valor: string | null | undefined): string | null {
+  if (!valor) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(valor)) return `${valor}T12:00:00-03:00`
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(valor)) return `${valor}-03:00`
+  return valor
+}
+
+// Converte o que vem do banco (Date) ou do PNCP (texto, talvez sem fuso).
+export function paraData(valor: string | Date): Date {
+  return typeof valor === 'string' ? new Date(comFusoDeBrasilia(valor) as string) : new Date(valor)
+}
+
 const DIA_MES = new Intl.DateTimeFormat('pt-BR', {
   timeZone: 'America/Maceio',
   day: '2-digit',
@@ -21,7 +38,7 @@ const DIA_MES = new Intl.DateTimeFormat('pt-BR', {
 })
 
 export function formatarDiaMes(iso: string): string {
-  return DIA_MES.format(new Date(iso))
+  return DIA_MES.format(paraData(iso))
 }
 
 const DIA_SEMANA = new Intl.DateTimeFormat('pt-BR', {
@@ -62,7 +79,7 @@ const DATA_COMPLETA = new Intl.DateTimeFormat('pt-BR', {
 
 export function formatarDataCompleta(iso: string | null): string {
   if (!iso) return '—'
-  return DATA_COMPLETA.format(new Date(iso))
+  return DATA_COMPLETA.format(paraData(iso))
 }
 
 const HORA = new Intl.DateTimeFormat('pt-BR', {
@@ -73,7 +90,7 @@ const HORA = new Intl.DateTimeFormat('pt-BR', {
 
 export function formatarDataHora(iso: string | null): string {
   if (!iso) return '—'
-  const data = new Date(iso)
+  const data = paraData(iso)
   return `${DATA_COMPLETA.format(data)}, ${HORA.format(data).replace(':', 'h')}`
 }
 
@@ -108,7 +125,7 @@ export function prazoEstaCurto(abertura: string | null, hoje = new Date()): bool
   if (!abertura) return false
 
   const inicio = Date.parse(`${diaEmMaceio(hoje)}T00:00:00Z`)
-  const fim = Date.parse(`${diaEmMaceio(new Date(abertura))}T00:00:00Z`)
+  const fim = Date.parse(`${diaEmMaceio(paraData(abertura))}T00:00:00Z`)
   const dias = (fim - inicio) / 86_400_000
 
   return dias >= 0 && dias <= DIAS_PARA_PRAZO_CURTO
@@ -132,6 +149,6 @@ export function descreverPrazo(prazo: string | null, hoje = new Date()): { texto
 export function diasAteAbertura(abertura: string | null, hoje = new Date()): number | null {
   if (!abertura) return null
   const inicio = Date.parse(`${diaEmMaceio(hoje)}T00:00:00Z`)
-  const fim = Date.parse(`${diaEmMaceio(new Date(abertura))}T00:00:00Z`)
+  const fim = Date.parse(`${diaEmMaceio(paraData(abertura))}T00:00:00Z`)
   return (fim - inicio) / 86_400_000
 }

@@ -37,6 +37,7 @@ export interface AvisoDeDiario {
   visto: boolean
   favorito: boolean
   dia: string // YYYY-MM-DD da publicação
+  diaDoBoletim: string // YYYY-MM-DD do boletim em que entrou (dia da captura, 2026-10-06)
   descartado: boolean
   statusInterno: string | null
 }
@@ -57,7 +58,7 @@ function paraDia(valor: unknown): string {
   return new Date(valor as string).toISOString().slice(0, 10)
 }
 
-function normalizar(texto: string): string {
+export function normalizar(texto: string): string {
   return texto
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
@@ -127,6 +128,13 @@ const TIPO_LICITACAO_DOE: Record<string, string> = {
   suspensao: 'Suspensão',
 }
 
+// "N/ano" de um edital do PNCP citado no texto (já normalizado), sem casar
+// dentro de outro número ("109/2026" não bate com "9/2026"). Usado aqui e em
+// lib/ligar-avisos.ts.
+export function citaNumeroDaCompra(textoNormalizado: string, numero: string | number, ano: number): boolean {
+  return new RegExp(`(^|[^0-9.])0*${Number(numero)}\\s*/\\s*${ano}(?![0-9])`).test(textoNormalizado)
+}
+
 // Aviso municipal que também está no PNCP já aparece na seção de editais —
 // sem isso o pregão de Maceió que o PNCP trouxe apareceria duas vezes. O
 // número do pregão no diário não é chave confiável, então a regra é
@@ -159,9 +167,7 @@ async function chavesMunicipaisNoPncp(
   for (const linha of linhas) {
     const candidatos = porMunicipio.get(normalizar(linha.municipio)) ?? []
     const texto = normalizar(linha.texto)
-    const bate = candidatos.some(({ numero, ano }) =>
-      new RegExp(`(^|[^0-9.])0*${numero}\\s*/\\s*${ano}(?![0-9])`).test(texto)
-    )
+    const bate = candidatos.some(({ numero, ano }) => citaNumeroDaCompra(texto, numero, ano))
     if (bate) noPncp.add(linha.id)
   }
   return noPncp
@@ -170,10 +176,10 @@ async function chavesMunicipaisNoPncp(
 async function avisosJudiciais(filtro: Filtro): Promise<AvisoDeDiario[]> {
   const onde = porIds(filtro)
     ? sql`m.id = ANY(${filtro.ids})`
-    : sql`m.publication_date BETWEEN ${filtro.inicio}::date AND ${filtro.fim}::date`
+    : sql`m.boletim_dia BETWEEN ${filtro.inicio}::date AND ${filtro.fim}::date`
   const linhas = (await sql`
     SELECT m.id, m.snippet, m.processo_numero, m.page_number, m.edition_number, m.pdf_url,
-           m.keywords_matched, m.publication_date, s.visto_em, s.favorito, s.descartado_em, s.status_interno
+           m.keywords_matched, m.publication_date, m.boletim_dia, s.visto_em, s.favorito, s.descartado_em, s.status_interno
     FROM doe_al_matches m
     LEFT JOIN diario_status s ON s.fonte = 'judicial' AND s.aviso_id = m.id
     WHERE ${onde}
@@ -196,6 +202,7 @@ async function avisosJudiciais(filtro: Filtro): Promise<AvisoDeDiario[]> {
     visto: l.visto_em !== null,
     favorito: Boolean(l.favorito),
     dia: paraDia(l.publication_date),
+    diaDoBoletim: paraDia(l.boletim_dia),
     descartado: l.descartado_em !== null,
     statusInterno: (l.status_interno as string | null) ?? null,
   }))
@@ -204,7 +211,7 @@ async function avisosJudiciais(filtro: Filtro): Promise<AvisoDeDiario[]> {
 async function avisosLicitacaoDoe(filtro: Filtro): Promise<AvisoDeDiario[]> {
   const onde = porIds(filtro)
     ? sql`l.id = ANY(${filtro.ids})`
-    : sql`l.publication_date BETWEEN ${filtro.inicio}::date AND ${filtro.fim}::date
+    : sql`l.boletim_dia BETWEEN ${filtro.inicio}::date AND ${filtro.fim}::date
       -- Pregão que o PNCP já trouxe está na seção de editais.
       AND NOT EXISTS (
         SELECT 1 FROM editais e
@@ -212,7 +219,7 @@ async function avisosLicitacaoDoe(filtro: Filtro): Promise<AvisoDeDiario[]> {
       )`
   const linhas = (await sql`
     SELECT l.id, l.tipo, l.processo, l.numero_pregao, l.orgao_sigla, l.objeto, l.data_realizacao,
-           l.keywords_matched, l.edition_number, l.page_number, l.pdf_url, l.publication_date,
+           l.keywords_matched, l.edition_number, l.page_number, l.pdf_url, l.publication_date, l.boletim_dia,
            s.visto_em, s.favorito, s.descartado_em, s.status_interno
     FROM doe_al_licitacoes l
     LEFT JOIN diario_status s ON s.fonte = 'doe_licitacao' AND s.aviso_id = l.id
@@ -239,6 +246,7 @@ async function avisosLicitacaoDoe(filtro: Filtro): Promise<AvisoDeDiario[]> {
       visto: l.visto_em !== null,
       favorito: Boolean(l.favorito),
       dia: paraDia(l.publication_date),
+      diaDoBoletim: paraDia(l.boletim_dia),
       descartado: l.descartado_em !== null,
       statusInterno: (l.status_interno as string | null) ?? null,
     }
@@ -256,7 +264,7 @@ const ORGAO_ESTADUAL: Record<string, string> = {
 async function avisosCotacaoDoe(filtro: Filtro): Promise<AvisoDeDiario[]> {
   const onde = porIds(filtro)
     ? sql`c.id = ANY(${filtro.ids})`
-    : sql`c.publication_date BETWEEN ${filtro.inicio}::date AND ${filtro.fim}::date
+    : sql`c.boletim_dia BETWEEN ${filtro.inicio}::date AND ${filtro.fim}::date
       -- Cotação cujo processo já virou edital no PNCP está na seção de editais.
       AND NOT EXISTS (
         SELECT 1 FROM editais e
@@ -264,7 +272,7 @@ async function avisosCotacaoDoe(filtro: Filtro): Promise<AvisoDeDiario[]> {
       )`
   const linhas = (await sql`
     SELECT c.id, c.orgao, c.numero_cotacao, c.processo, c.objeto, LEFT(c.corpo, 400) AS corpo, c.keywords_matched,
-           c.prazo, c.edition_number, c.page_number, c.pdf_url, c.publication_date,
+           c.prazo, c.edition_number, c.page_number, c.pdf_url, c.publication_date, c.boletim_dia,
            s.visto_em, s.favorito, s.descartado_em, s.status_interno
     FROM doe_al_cotacoes c
     LEFT JOIN diario_status s ON s.fonte = 'doe_cotacao' AND s.aviso_id = c.id
@@ -292,6 +300,7 @@ async function avisosCotacaoDoe(filtro: Filtro): Promise<AvisoDeDiario[]> {
       visto: l.visto_em !== null,
       favorito: Boolean(l.favorito),
       dia: paraDia(l.publication_date),
+      diaDoBoletim: paraDia(l.boletim_dia),
       descartado: l.descartado_em !== null,
       statusInterno: (l.status_interno as string | null) ?? null,
     }
@@ -301,13 +310,13 @@ async function avisosCotacaoDoe(filtro: Filtro): Promise<AvisoDeDiario[]> {
 async function avisosMunicipais(filtro: Filtro): Promise<AvisoDeDiario[]> {
   const onde = porIds(filtro)
     ? sql`m.id = ANY(${filtro.ids})`
-    : sql`m.data_circulacao BETWEEN ${filtro.inicio}::date AND ${filtro.fim}::date`
+    : sql`m.boletim_dia BETWEEN ${filtro.inicio}::date AND ${filtro.fim}::date`
   // Só o começo do corpo: é o que a checagem de duplicata com o PNCP e o
   // texto sem cabeçalho usam (até ~1.100 caracteres), e num mês inteiro o
   // corpo completo seria megabytes à toa.
   const linhas = (await sql`
     SELECT m.id, m.diario, m.titulo, m.entidade, m.orgao, m.processo, m.objeto,
-           LEFT(m.corpo, 1200) AS corpo, m.keywords_matched, m.edicao, m.url, m.data_circulacao, m.data_sessao,
+           LEFT(m.corpo, 1200) AS corpo, m.keywords_matched, m.edicao, m.url, m.data_circulacao, m.data_sessao, m.boletim_dia,
            s.visto_em, s.favorito, s.descartado_em, s.status_interno
     FROM diario_municipal_materias m
     LEFT JOIN diario_status s ON s.fonte = 'municipal' AND s.aviso_id = m.id
@@ -355,6 +364,7 @@ async function avisosMunicipais(filtro: Filtro): Promise<AvisoDeDiario[]> {
         visto: l.visto_em !== null,
         favorito: Boolean(l.favorito),
         dia: paraDia(l.data_circulacao),
+        diaDoBoletim: paraDia(l.boletim_dia),
         descartado: l.descartado_em !== null,
         statusInterno: (l.status_interno as string | null) ?? null,
       }
@@ -426,10 +436,10 @@ export async function buscarAvisosDescartadosDoDia(dia: string): Promise<AvisoDe
 // sem edital do PNCP mas com aviso (ex: PNCP fora do ar).
 export async function diasComAviso(): Promise<string[]> {
   const linhas = (await sql`
-    SELECT publication_date AS dia FROM doe_al_matches
-    UNION SELECT publication_date FROM doe_al_licitacoes
-    UNION SELECT publication_date FROM doe_al_cotacoes
-    UNION SELECT data_circulacao FROM diario_municipal_materias
+    SELECT boletim_dia AS dia FROM doe_al_matches
+    UNION SELECT boletim_dia FROM doe_al_licitacoes
+    UNION SELECT boletim_dia FROM doe_al_cotacoes
+    UNION SELECT boletim_dia FROM diario_municipal_materias
   `) as { dia: string }[]
   return linhas.map((l) => new Date(l.dia).toISOString().slice(0, 10))
 }
@@ -448,20 +458,20 @@ export async function contarAvisosNaoVistosRecentes(): Promise<number> {
     WITH vistos AS (SELECT fonte, aviso_id FROM diario_status WHERE visto_em IS NOT NULL OR descartado_em IS NOT NULL)
     SELECT
       (SELECT COUNT(*) FROM doe_al_matches m
-        WHERE m.publication_date >= CURRENT_DATE - 7
+        WHERE m.boletim_dia >= CURRENT_DATE - 7
           AND NOT EXISTS (SELECT 1 FROM vistos v WHERE v.fonte = 'judicial' AND v.aviso_id = m.id))
     + (SELECT COUNT(*) FROM doe_al_licitacoes l
-        WHERE l.publication_date >= CURRENT_DATE - 7
+        WHERE l.boletim_dia >= CURRENT_DATE - 7
           AND cardinality(l.keywords_matched) > 0 AND l.tipo IN ('licitacao', 'reabertura')
           AND NOT EXISTS (SELECT 1 FROM editais e WHERE regexp_replace(e.raw_json->>'processo', '^E:\\s*', '') = l.processo)
           AND NOT EXISTS (SELECT 1 FROM vistos v WHERE v.fonte = 'doe_licitacao' AND v.aviso_id = l.id))
     + (SELECT COUNT(*) FROM doe_al_cotacoes c
-        WHERE c.publication_date >= CURRENT_DATE - 7
+        WHERE c.boletim_dia >= CURRENT_DATE - 7
           AND cardinality(c.keywords_matched) > 0
           AND NOT EXISTS (SELECT 1 FROM editais e WHERE c.processo IS NOT NULL AND regexp_replace(e.raw_json->>'processo', '^E:\\s*', '') = c.processo)
           AND NOT EXISTS (SELECT 1 FROM vistos v WHERE v.fonte = 'doe_cotacao' AND v.aviso_id = c.id))
     + (SELECT COUNT(*) FROM diario_municipal_materias d
-        WHERE d.data_circulacao >= CURRENT_DATE - 7
+        WHERE d.boletim_dia >= CURRENT_DATE - 7
           AND (cardinality(d.keywords_matched) > 0 OR (d.diario = 'maceio' AND d.processo LIKE '5800.%'))
           AND COALESCE(d.orgao, '') NOT ILIKE '%publica%privada%'
           AND NOT EXISTS (SELECT 1 FROM vistos v WHERE v.fonte = 'municipal' AND v.aviso_id = d.id))

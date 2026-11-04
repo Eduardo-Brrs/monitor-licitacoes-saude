@@ -20,9 +20,16 @@ export const SEGMENTOS: Segmento[] = [
       'coletor urinário',
       'lanceta',
       'fio cirúrgico',
+      // "Enxoval (Material Cirúrgico)" (AMGESP 91.179/2026, DOE-AL 04/11). `cirúrgico`
+      // solto pega serviço ("procedimento cirúrgico"). Adicionado em 2026-11-04.
+      'material cirúrgico',
       'soro',
       'médico hospitalar',
       'correlatos',
+      // Singular: "material correlato" (Estrela de Alagoas PE/16, boletim de
+      // 14/10) não batia `correlatos`. "correlato" solto tem ruído
+      // ("mobiliário correlato") — por isso a frase. 2026-10-22.
+      'material correlato',
       'fio',
       'material de laboratório',
       'equipamento de saúde',
@@ -73,6 +80,7 @@ export const SEGMENTOS: Segmento[] = [
     termos: [
       'cadeira de rodas',
       'cama hospitalar',
+      'mesa cirúrgica',
       'maca',
       'nebulizador',
       'oxímetro',
@@ -119,6 +127,14 @@ export const SEGMENTOS: Segmento[] = [
       'fórmula infantil',
       'suplemento nutricional',
       'suplemento alimentar',
+      // Sozinha: o pregão da AMGESP "AQUISIÇÃO DE DIETAS E SUPLEMENTOS"
+      // (PE/212, R$ 3,5 mi, boletim de 29/09) não batia nada no objeto.
+      // Ruído zero medido em 1.273 textos do banco em 2026-10-02.
+      'dieta',
+      // Sozinha: "fórmula nutricional enteral e oral" (Piaçabuçu DL/2,
+      // boletim de 14/10) não batia nada do segmento. Termo técnico, sem
+      // ruído no retrato de 807 objetos. 2026-10-22.
+      'enteral',
     ],
   },
   {
@@ -194,6 +210,16 @@ export const TERMOS_COMPOSTOS: TermoComposto[] = [
   // o "saúde" é justamente o nome do órgão que compra, por isso a marca.
   // Adicionado em 2026-09-30.
   { rotulo: 'suplemento + saúde', palavras: ['suplemento', 'saúde'], aceitaNomeDoOrgao: true },
+  // "AQUISIÇÃO DE MATERIAIS E INSUMOS DE LABORATÓRIO 03" (AMGESP, cotação no
+  // DOE-AL 179/2026 e pregão PE/193) não batia `material de laboratório`
+  // porque "insumos" fica no meio. Com "material" no lugar de "insumo" pegaria
+  // "controle de acesso biométrico do laboratório". Adicionado em 2026-10-27.
+  { rotulo: 'insumo + laboratório', palavras: ['insumo', 'laboratório'] },
+  // "Materiais de Plástico, Limpeza e Descartáveis" (AMGESP 90.303/2026, DOE-AL
+  // 04/11) não batia `material de limpeza`. Ruído aceito: contrato de serviço de
+  // limpeza que cita materiais (3 de 5 na medição). `descartável` sozinho é quase
+  // todo copa e cozinha. Adicionado em 2026-11-04.
+  { rotulo: 'material + limpeza', palavras: ['material', 'limpeza'] },
 ]
 
 // Remove acentos e normaliza hífen/espaço para casar variações comuns de digitação em editais (ex: "raio x" vs "raio-x").

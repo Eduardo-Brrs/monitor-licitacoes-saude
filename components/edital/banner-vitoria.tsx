@@ -1,14 +1,29 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { confirmarVitoria, descartarSugestaoVitoria } from '@/app/actions/acompanhamento'
+import { descartarSugestaoVitoria } from '@/app/actions/acompanhamento'
+import { JanelaFinalizar } from '@/components/acompanhamento/janela-finalizar'
 
 // Tela 04 do DESIGN.md: vitória detectada pelo CNPJ é sugestão, nunca escrita
-// automática (regra 6). Um clique confirma (status interno vira "Ganha"),
-// outro esconde a sugestão.
-export function BannerVitoria({ editalId, titulo, detalhe }: { editalId: number; titulo: string; detalhe: string }) {
+// automática (regra 6). Confirmar abre a janela "Finalizar" já em "ganhamos
+// todos os itens" (2026-10-27) — dá pra trocar pra parte, pôr o valor e a
+// observação; o outro botão esconde a sugestão.
+export function BannerVitoria({
+  editalId,
+  objeto,
+  titulo,
+  detalhe,
+  valorHomologado,
+}: {
+  editalId: number
+  objeto: string
+  valorHomologado: number
+  titulo: string
+  detalhe: string
+}) {
   const [pendente, iniciar] = useTransition()
   const [escondido, setEscondido] = useState(false)
+  const [finalizando, setFinalizando] = useState(false)
   if (escondido) return null
 
   return (
@@ -20,12 +35,7 @@ export function BannerVitoria({ editalId, titulo, detalhe }: { editalId: number;
       <button
         type="button"
         disabled={pendente}
-        onClick={() =>
-          iniciar(async () => {
-            await confirmarVitoria(editalId)
-            setEscondido(true)
-          })
-        }
+        onClick={() => setFinalizando(true)}
         className="h-9 rounded-control border border-accent bg-accent px-3.5 text-[13px] font-medium text-white hover:bg-accent-strong disabled:opacity-60"
       >
         Confirmar como ganha
@@ -43,6 +53,16 @@ export function BannerVitoria({ editalId, titulo, detalhe }: { editalId: number;
       >
         Não é nosso
       </button>
+      <JanelaFinalizar
+        fonte="pncp"
+        itemId={editalId}
+        rotulo={objeto}
+        aberta={finalizando}
+        aoFechar={() => setFinalizando(false)}
+        sugerido="ganhou_todos"
+        valorSugerido={valorHomologado > 0 ? valorHomologado : undefined}
+        aoFinalizar={() => setEscondido(true)}
+      />
     </div>
   )
 }

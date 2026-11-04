@@ -1,6 +1,6 @@
 import { sql } from '@/lib/db'
 import { DIAS_COM_BOLETIM } from '@/lib/boletim'
-import { buscarAvisosDoPeriodo, type AvisoDeDiario } from '@/lib/diarios'
+import { buscarAvisosDoPeriodo } from '@/lib/diarios'
 import { diaEmMaceio } from '@/lib/formato'
 
 // Tela "Boletins anteriores" (docs/design/DESIGN.md, tela 06). Os números de
@@ -62,20 +62,22 @@ export async function resumoDoMes(mes: string): Promise<MesDoArquivo> {
   const [editaisBruto, pendentesBruto, avisos, limitesBruto] = await Promise.all([
     sql`
       SELECT
-        e.data_publicacao_pncp::date AS dia,
+        e.boletim_dia AS dia,
         COUNT(*)::int AS total,
         COUNT(*) FILTER (WHERE s.descartado_em IS NULL)::int AS nos_filtros,
         COUNT(*) FILTER (WHERE s.visto_em IS NULL AND s.descartado_em IS NULL)::int AS nao_vistos,
-        COUNT(*) FILTER (WHERE COALESCE(s.favorito, FALSE))::int AS favoritados
+        -- Favoritada ou com status: depois de "Gerenciar" a estrela apaga
+        -- (etapa única, 2026-10-07) e o item sumiria da contagem.
+        COUNT(*) FILTER (WHERE COALESCE(s.favorito, FALSE) OR s.status_interno IS NOT NULL)::int AS favoritados
       FROM editais e
       LEFT JOIN edital_status s ON s.edital_id = e.id
-      WHERE e.data_publicacao_pncp::date BETWEEN ${inicio}::date AND ${fim}::date
+      WHERE e.boletim_dia BETWEEN ${inicio}::date AND ${fim}::date
       GROUP BY 1
     `,
     sql`
-      SELECT (contratacao_json->>'dataPublicacaoPncp')::date AS dia, COUNT(*)::int AS total
+      SELECT boletim_dia AS dia, COUNT(*)::int AS total
       FROM itens_pendentes
-      WHERE (contratacao_json->>'dataPublicacaoPncp')::date BETWEEN ${inicio}::date AND ${fim}::date
+      WHERE boletim_dia BETWEEN ${inicio}::date AND ${fim}::date
       GROUP BY 1
     `,
     buscarAvisosDoPeriodo(inicio, fim),
@@ -114,9 +116,9 @@ export async function resumoDoMes(mes: string): Promise<MesDoArquivo> {
   }
 
   for (const aviso of avisos) {
-    const linha = linhaDe(aviso.dia)
+    const linha = linhaDe(aviso.diaDoBoletim)
     linha.publicados++
-    if (aviso.favorito) linha.favoritados++
+    if (aviso.favorito || aviso.statusInterno) linha.favoritados++
     if (aviso.relevante && !aviso.descartado) {
       linha.nosFiltros++
       if (!aviso.visto) linha.naoVistos++
@@ -145,95 +147,3 @@ function proximoDia(dia: string): string {
   return data.toISOString().slice(0, 10)
 }
 
-// ---------------------------------------------------------------------------
-// Busca em todos os meses
-
-export interface ResultadoDaBusca {
-  chave: string
-  dia: string
-  tipo: string
-  origem: string
-  texto: string
-  entidade: string | null
-  href: string
-  externo: boolean
-  favorito: boolean
-  visto: boolean
-  descartado: boolean
-}
-
-export const MAX_RESULTADOS = 100
-
-function normalizar(texto: string): string {
-  return texto
-    .normalize('NFD')
-    .replace(/[̀-ͯ]/g, '')
-    .toLowerCase()
-}
-
-// Sem a extensão unaccent no Neon: translate() tira os acentos do português
-// dos dois lados, mesmo efeito pra busca.
-const COM_ACENTO = 'áàâãäéèêëíìîïóòôõöúùûüç'
-const SEM_ACENTO = 'aaaaaeeeeiiiiooooouuuuc'
-
-export async function buscarNoArquivo(termo: string): Promise<{ resultados: ResultadoDaBusca[]; total: number }> {
-  const alvo = normalizar(termo.trim())
-  const padrao = `%${alvo}%`
-
-  const [editaisBruto, avisos] = await Promise.all([
-    sql`
-      SELECT e.numero_controle_pncp, e.objeto_compra, e.orgao_razao_social, e.municipio_nome,
-             e.modalidade_nome, e.raw_json->>'numeroCompra' AS numero_compra, e.ano_compra,
-             e.data_publicacao_pncp, s.visto_em, s.descartado_em, COALESCE(s.favorito, FALSE) AS favorito
-      FROM editais e
-      LEFT JOIN edital_status s ON s.edital_id = e.id
-      WHERE translate(lower(concat_ws(' ', e.objeto_compra, e.orgao_razao_social, e.municipio_nome,
-                                      e.numero_controle_pncp, e.raw_json->>'numeroCompra',
-                                      array_to_string(e.keywords_matched, ' '))),
-                      ${COM_ACENTO}, ${SEM_ACENTO}) LIKE ${padrao}
-      ORDER BY e.data_publicacao_pncp DESC
-    `,
-    // Avisos: o histórico inteiro cabe folgado em memória (poucos milhares de
-    // linhas) e assim a busca olha exatamente o texto que a tela mostra.
-    buscarAvisosDoPeriodo('2000-01-01', diaEmMaceio(new Date())),
-  ])
-
-  const deEditais: ResultadoDaBusca[] = (editaisBruto as Record<string, unknown>[]).map((e) => {
-    const numero = e.numero_compra ? `nº ${e.numero_compra}/${e.ano_compra}` : null
-    return {
-      chave: `pncp:${e.numero_controle_pncp}`,
-      dia: new Date(e.data_publicacao_pncp as string).toISOString().slice(0, 10),
-      tipo: (e.modalidade_nome as string | null) ?? 'Edital',
-      origem: ['PNCP', numero].filter(Boolean).join(' · '),
-      texto: e.objeto_compra as string,
-      entidade: [e.orgao_razao_social, e.municipio_nome].filter(Boolean).join(' · ') || null,
-      href: `/edital/${encodeURIComponent(e.numero_controle_pncp as string)}`,
-      externo: false,
-      favorito: e.favorito as boolean,
-      visto: e.visto_em !== null,
-      descartado: e.descartado_em !== null,
-    }
-  })
-
-  const textoDoAviso = (a: AvisoDeDiario) =>
-    normalizar([a.tipo, a.origem, a.entidade, a.texto, a.processo, a.keywords.join(' ')].filter(Boolean).join(' '))
-
-  const deAvisos: ResultadoDaBusca[] = avisos
-    .filter((a) => textoDoAviso(a).includes(alvo))
-    .map((a) => ({
-      chave: a.chave,
-      dia: a.dia,
-      tipo: a.tipo,
-      origem: a.origem,
-      texto: a.texto,
-      entidade: a.entidade,
-      href: a.url,
-      externo: true,
-      favorito: a.favorito,
-      visto: a.visto,
-      descartado: a.descartado,
-    }))
-
-  const todos = [...deEditais, ...deAvisos].sort((a, b) => b.dia.localeCompare(a.dia))
-  return { resultados: todos.slice(0, MAX_RESULTADOS), total: todos.length }
-}

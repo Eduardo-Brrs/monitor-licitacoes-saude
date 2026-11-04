@@ -27,7 +27,7 @@ const plexMono = IBM_Plex_Mono({
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: `Boletim — ${process.env.NOME_EMPRESA ?? "Licitações"}`,
+  title: `Licitações — ${process.env.NOME_EMPRESA ?? "Saúde"}`,
   description: "Monitoramento de editais de licitação da área da saúde em Alagoas",
 };
 
